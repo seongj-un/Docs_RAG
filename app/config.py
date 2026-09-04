@@ -20,7 +20,18 @@ class Settings(BaseSettings):
     embed_provider: str = "local"
     embed_model: str = "BAAI/bge-m3"
     embed_dim: int = 1024
+    # BGE-M3 lexical (sparse) weights live over the tokenizer vocab (XLM-R = 250002).
+    embed_sparse_dim: int = 250002
     tei_url: str = "http://localhost:8080"
+
+    # --- M2: hybrid search + reranking ---
+    # When true, /query uses dense+sparse RRF fusion then cross-encoder rerank.
+    # When false, falls back to M1 dense-only cosine search.
+    hybrid_enabled: bool = True
+    rerank_url: str = "http://localhost:8081"  # bge-reranker-v2-m3 (TEI)
+    rrf_k: int = 60          # RRF constant
+    cand_k: int = 50         # candidates per retriever (dense top-N, sparse top-N)
+    rerank_top: int = 8      # chunks kept after reranking (context size)
 
     # Generation LLM (Gemini)
     llm_provider: str = "gemini"
