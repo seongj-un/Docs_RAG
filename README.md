@@ -4,8 +4,8 @@
 
 ## 스택
 - Python 3.11+, FastAPI + uvicorn
-- PostgreSQL 16 + pgvector, SQLAlchemy(async)
-- PDF 파싱: PyMuPDF
+- PostgreSQL 16 + pgvector, SQLAlchemy(async) + Alembic
+- PDF 파싱: PyMuPDF / 청킹: BGE-M3 토크나이저 기반 토큰 윈도우(페이지 단위)
 - 임베딩: BGE-M3 (TEI 서버, dense 1024) / 생성: Gemini (Flash)
 
 ## 구조
@@ -25,9 +25,10 @@ app/
 cp .env.example .env          # 값 채우기 (GEMINI_API_KEY 등)
 docker compose up -d db tei   # pgvector + BGE-M3 TEI (GPU 필요)
 pip install -r requirements.txt
-uvicorn app.main:app --reload # init_db()가 확장·테이블·HNSW 생성
+alembic upgrade head          # 스키마 마이그레이션 (확장·테이블·HNSW)
+uvicorn app.main:app --reload # 시작 시 마이그레이션 자동 적용도 됨
 ```
-`/docs` 에서 스키마 확인.
+`/docs` 에서 스키마 확인. 스키마 변경은 Alembic으로: `alembic revision --autogenerate -m "..."` → `alembic upgrade head`.
 
 ## API
 - `POST /documents` — multipart PDF 업로드 → 202 `{id, filename, status}`
