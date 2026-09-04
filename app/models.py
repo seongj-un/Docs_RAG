@@ -9,7 +9,7 @@ Schema is intentionally shaped for later milestones:
 import uuid
 from datetime import datetime
 
-from pgvector.sqlalchemy import Vector
+from pgvector.sqlalchemy import SPARSEVEC, Vector
 from sqlalchemy import (
     ForeignKey,
     Index,
@@ -86,6 +86,11 @@ class Chunk(Base):
     embed_model: Mapped[str] = mapped_column(String, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(
         Vector(settings.embed_dim), nullable=False
+    )
+    # M2: BGE-M3 lexical weights for hybrid (sparse) retrieval. Nullable so M1
+    # rows survive until backfilled; new rows are written with both vectors.
+    sparse_embedding: Mapped[object | None] = mapped_column(
+        SPARSEVEC(settings.embed_sparse_dim), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
