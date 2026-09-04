@@ -1,20 +1,20 @@
 """FastAPI application entrypoint.
 
-Schema is bootstrapped on startup via ``init_db()`` (M1). Routers cover the
-documents lifecycle and grounded query.
+Schema is applied on startup via Alembic (``run_migrations()``). Routers cover
+the documents lifecycle and grounded query.
 """
 
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.db import init_db
+from app.db import run_migrations
 from app.routers import documents, query
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
+    await run_migrations()
     yield
 
 

@@ -1,13 +1,14 @@
-"""Async SQLAlchemy engine/session and M1 schema bootstrap.
+"""Async SQLAlchemy engine/session and schema migration.
 
-M1 creates the schema directly via ``init_db()`` (the pgvector extension, the
-tables, and the HNSW index). Alembic migrations are deferred to M2 — see the
-roadmap in the project spec.
+The schema is owned by Alembic (``alembic/versions``). ``run_migrations()``
+applies migrations up to head; the app calls it on startup so ``uvicorn`` works
+out of the box, and it can also be run manually via ``alembic upgrade head``.
 """
 
+import asyncio
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -15,7 +16,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config import settings
-from app.models import Base
+
+_ROOT = Path(__file__).resolve().parent.parent
 
 engine = create_async_engine(settings.database_url, echo=False, pool_pre_ping=True)
 
@@ -28,12 +30,19 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-async def init_db() -> None:
-    """Create the pgvector extension, tables, and vector index if missing.
+def _upgrade_to_head() -> None:
+    from alembic import command
+    from alembic.config import Config
 
-    The extension must exist before ``create_all`` runs, because the ``chunks``
-    table declares a ``VECTOR`` column and an HNSW index over it.
+    cfg = Config(str(_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(_ROOT / "alembic"))
+    command.upgrade(cfg, "head")
+
+
+async def run_migrations() -> None:
+    """Apply Alembic migrations to head.
+
+    Runs in a worker thread because Alembic's online env opens its own event
+    loop (``asyncio.run``), which cannot nest inside the running app loop.
     """
-    async with engine.begin() as conn:
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        await conn.run_sync(Base.metadata.create_all)
+    await asyncio.to_thread(_upgrade_to_head)
