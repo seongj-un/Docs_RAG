@@ -28,6 +28,9 @@ class DocumentStatus(BaseModel):
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1)
     document_id: uuid.UUID | None = None
+    # Per-request override of HYBRID_ENABLED (None -> use the server default).
+    # Lets callers A/B hybrid+rerank vs M1 dense-only on the same corpus.
+    hybrid: bool | None = None
 
 
 class Citation(BaseModel):
