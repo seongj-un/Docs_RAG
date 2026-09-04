@@ -45,7 +45,14 @@ async def index_document(document_id: uuid.UUID, file_path: str) -> None:
             if not parts:
                 raise ValueError("no extractable text in PDF")
 
-            vectors = await embeddings.embed_texts([p.content for p in parts])
+            contents = [p.content for p in parts]
+            # M2: store dense + sparse when hybrid is on so docs are
+            # hybrid-ready; fall back to dense-only otherwise.
+            if settings.hybrid_enabled:
+                dense, sparse = await embeddings.embed_full(contents)
+            else:
+                dense = await embeddings.embed_texts(contents)
+                sparse = [None] * len(contents)
 
             session.add_all(
                 [
@@ -57,9 +64,10 @@ async def index_document(document_id: uuid.UUID, file_path: str) -> None:
                         content=p.content,
                         token_count=p.token_count,
                         embed_model=settings.embed_model,
-                        embedding=vec,
+                        embedding=dvec,
+                        sparse_embedding=svec,
                     )
-                    for p, vec in zip(parts, vectors, strict=True)
+                    for p, dvec, svec in zip(parts, dense, sparse, strict=True)
                 ]
             )
             doc.status = "ready"
