@@ -41,8 +41,18 @@ uvicorn app.main:app --reload # 시작 시 마이그레이션 자동 적용도 �
 ## 테스트
 ```bash
 pip install pytest
-pytest            # 인프라 불필요한 순수 로직(청킹·거부 가드레일) 검증
+pytest            # 인프라 불필요한 순수 로직(청킹·거부 가드레일·평가지표) 검증
 ```
+
+## 검색 품질 평가
+라벨링된 코퍼스로 검색 구성(dense / hybrid / hybrid+rerank)을 정량 비교한다.
+생성은 제외하고 검색 단계만 측정한다.
+```bash
+python -m eval.run --corpus hard   # 40p·20질의, 혼동 후보 포함 (판별력 있음)
+python -m eval.run --corpus simple # 15p·15질의, 전 구성 만점 = 판별 불가(음성 대조군)
+```
+Postgres + 임베딩/리랭커 서버(`TEI_URL`, `RERANK_URL`)가 필요하다.
+결과 해석은 Notion M2 페이지의 D18 항목 참조.
 
 ## 완료 기준 (M1)
 1. 업로드 후 status `processing → ready`
