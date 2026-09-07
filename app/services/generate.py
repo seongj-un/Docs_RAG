@@ -51,7 +51,7 @@ def _snippet(text: str, limit: int = 240) -> str:
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-def _build_context(chunks: list[RetrievedChunk]) -> str:
+def build_context(chunks: list[RetrievedChunk]) -> str:
     blocks = []
     for c in chunks:
         page = c.page_from if c.page_from == c.page_to else f"{c.page_from}-{c.page_to}"
@@ -59,7 +59,7 @@ def _build_context(chunks: list[RetrievedChunk]) -> str:
     return "\n\n---\n\n".join(blocks)
 
 
-def _citations(chunks: list[RetrievedChunk]) -> list[Citation]:
+def citations_for(chunks: list[RetrievedChunk]) -> list[Citation]:
     return [
         Citation(
             chunk_id=c.chunk_id,
@@ -70,6 +70,24 @@ def _citations(chunks: list[RetrievedChunk]) -> list[Citation]:
         )
         for c in chunks
     ]
+
+
+def build_user_prompt(question: str, grounded: list[RetrievedChunk]) -> str:
+    """The user turn sent to the model.
+
+    Shared by the one-shot and streaming paths so both send the model exactly
+    the same prompt — a divergence here would make their answers differ for
+    reasons no metric would explain.
+    """
+    return f"질문: {question}\n\n컨텍스트:\n{build_context(grounded)}"
+
+
+def grounded_chunks(
+    chunks: list[RetrievedChunk], min_score: float | None = None
+) -> list[RetrievedChunk]:
+    """Chunks that clear the grounding floor for their score space."""
+    floor = settings.min_score if min_score is None else min_score
+    return [c for c in chunks if c.score >= floor]
 
 
 async def answer_question(
@@ -85,14 +103,12 @@ async def answer_question(
     ``chunks``: cosine similarity on the dense path, cross-encoder sigmoid
     on the reranked path. Defaults to the dense-path floor.
     """
-    floor = settings.min_score if min_score is None else min_score
-    grounded = [c for c in chunks if c.score >= floor]
+    grounded = grounded_chunks(chunks, min_score)
 
     if not grounded:
         return Answer(answer=REFUSAL_TEXT, refused=True, citations=[])
 
-    context = _build_context(grounded)
-    user_prompt = f"질문: {question}\n\n컨텍스트:\n{context}"
+    user_prompt = build_user_prompt(question, grounded)
     result = await llm.generate(SYSTEM_PROMPT, user_prompt, model=model)
     text = result.text
 
@@ -100,7 +116,7 @@ async def answer_question(
     return Answer(
         answer=text or REFUSAL_TEXT,
         refused=refused,
-        citations=[] if refused else _citations(grounded),
+        citations=[] if refused else citations_for(grounded),
         tokens_in=result.tokens_in,
         tokens_out=result.tokens_out,
     )
