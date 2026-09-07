@@ -57,5 +57,20 @@ class Settings(BaseSettings):
     session_cookie_secure: bool = False
     session_cookie_samesite: str = "lax"
 
+    # --- M3 Phase 2: abuse & cost defense ---
+    # Rate limits are per-process token buckets (see services/ratelimit.py):
+    # correct for a single instance, multiplied by N behind N workers.
+    rate_limit_query_per_min: int = 20
+    rate_limit_upload_per_min: int = 5
+    # Quotas are counted in the database, so they hold across processes.
+    quota_queries_per_day: int = 200
+    quota_upload_pages_per_month: int = 1000
+    # Upload guards, checked before any embedding spend.
+    max_upload_mb: int = 50
+    max_upload_pages: int = 500
+    # Semantic cache: reuse a past answer when a new question is near-identical.
+    semantic_cache_enabled: bool = True
+    semantic_cache_threshold: float = 0.95
+
 
 settings = Settings()

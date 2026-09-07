@@ -11,6 +11,7 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import SPARSEVEC, Vector
 from sqlalchemy import (
+    Boolean,
     ForeignKey,
     Index,
     Integer,
@@ -19,7 +20,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from app.config import settings
@@ -134,3 +135,66 @@ class Chunk(Base):
     )
 
     document: Mapped["Document"] = relationship(back_populates="chunks")
+
+
+class UsageEvent(Base):
+    """One billable action. Quotas are aggregated from these rows, so they hold
+    across processes and restarts (unlike the in-process rate limiter)."""
+
+    __tablename__ = "usage_events"
+    __table_args__ = (
+        Index("usage_events_user_created_idx", "user_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)  # query | ingest
+    tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Pages added by an ingest event; drives the monthly upload-page quota.
+    pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # True when a query was served from the semantic cache (no LLM spend).
+    cached: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class QueryCache(Base):
+    """Semantic cache: a past answer keyed by the question's embedding.
+
+    Scoped to (user, document) so a hit can never cross tenants and never
+    answers from a different document than the caller asked about.
+    """
+
+    __tablename__ = "query_cache"
+    __table_args__ = (
+        Index("query_cache_user_doc_idx", "user_id", "document_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    # NULL means the question was asked across all of the user's documents.
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    question_embedding: Mapped[list[float]] = mapped_column(
+        Vector(settings.embed_dim), nullable=False
+    )
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    refused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    citations: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
