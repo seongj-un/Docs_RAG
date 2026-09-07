@@ -128,7 +128,7 @@ def test_semantic_cache_hit_makes_zero_llm_calls(monkeypatch):
     async def exploding_generate(*args, **kwargs):
         raise AssertionError("LLM must not be called on a cache hit")
 
-    from app.routers import query as qr
+    from app.services import pipeline as qr
 
     monkeypatch.setattr(qr.embeddings, "embed_query_full", fake_embed_full)
     monkeypatch.setattr(llm, "generate", exploding_generate)

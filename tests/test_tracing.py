@@ -91,7 +91,8 @@ async def _drop_user(email: str) -> None:
 
 
 def _stub_pipeline(monkeypatch, candidates, ranked):
-    from app.routers import query as qr
+    from app.routers import query as rq
+    from app.services import pipeline as qr
 
     async def fake_embed_full(question):
         return [0.02] * EMBED_DIM, object()
@@ -118,7 +119,7 @@ def _stub_pipeline(monkeypatch, candidates, ranked):
     monkeypatch.setattr(qr.embeddings, "embed_query_full", fake_embed_full)
     monkeypatch.setattr(qr.retrieve, "hybrid_search", fake_hybrid)
     monkeypatch.setattr(qr.rerank, "rerank", fake_rerank)
-    monkeypatch.setattr(qr.generate, "answer_question", fake_answer)
+    monkeypatch.setattr(rq.generate, "answer_question", fake_answer)
 
 
 def test_query_records_trace_with_every_stage(monkeypatch):

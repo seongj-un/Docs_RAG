@@ -1,15 +1,18 @@
-"""Orchestration tests for the query retrieval pipeline (no infra/DB).
+"""Retrieval orchestration tests for the shared pipeline (no infra/DB).
 
-Covers both what the pipeline returns and what it hands to tracing: the stage
-records are what make retrieval-vs-generation failures separable later, so a
-silently empty stage would be a real defect.
+The runner is shared by ``POST /query`` and the streaming conversation
+endpoint, so these cover both. Stage records are asserted too: they are what
+make retrieval-vs-generation failures separable later, so a silently empty
+stage would be a real defect.
 """
 
 import asyncio
 import uuid
 
-from app.routers import query as qr
-from app.schemas import QueryRequest
+import pytest
+
+from app.models import User
+from app.services import pipeline
 from app.services.retrieve import HybridResult, RetrievedChunk
 from app.services.tracing import (
     STAGE_DENSE,
@@ -19,7 +22,7 @@ from app.services.tracing import (
     Stopwatch,
 )
 
-USER_ID = uuid.uuid4()
+USER = User(id=uuid.uuid4(), email="u@example.com", password_hash="x")
 DENSE = [0.1]
 SPARSE = object()  # opaque to the pipeline; only passed through
 
@@ -35,12 +38,13 @@ def _chunk(text: str, score: float = 0.0) -> RetrievedChunk:
     )
 
 
-def _run(body: QueryRequest, use_hybrid: bool, sparse=SPARSE):
-    return asyncio.run(
-        qr._retrieve_chunks(
-            None, body, use_hybrid, USER_ID, DENSE, sparse, Stopwatch()
-        )
+def _runner(hybrid: bool, sparse=SPARSE) -> pipeline.QueryRunner:
+    runner = pipeline.QueryRunner(
+        None, USER, "질문", document_id=None, hybrid=hybrid
     )
+    runner.dense = DENSE
+    runner.sparse = sparse
+    return runner
 
 
 def test_dense_path_uses_search_and_skips_rerank(monkeypatch):
@@ -49,7 +53,7 @@ def test_dense_path_uses_search_and_skips_rerank(monkeypatch):
 
     async def fake_search(session, emb, *, user_id, document_id=None):
         called["search"] += 1
-        assert user_id == USER_ID
+        assert user_id == USER.id
         return [hit]
 
     async def fake_hybrid(session, dense, sparse, *, user_id, document_id=None):
@@ -60,16 +64,15 @@ def test_dense_path_uses_search_and_skips_rerank(monkeypatch):
         called["rerank"] += 1
         return []
 
-    monkeypatch.setattr(qr.retrieve, "search", fake_search)
-    monkeypatch.setattr(qr.retrieve, "hybrid_search", fake_hybrid)
-    monkeypatch.setattr(qr.rerank, "rerank", fake_rerank)
+    monkeypatch.setattr(pipeline.retrieve, "search", fake_search)
+    monkeypatch.setattr(pipeline.retrieve, "hybrid_search", fake_hybrid)
+    monkeypatch.setattr(pipeline.rerank, "rerank", fake_rerank)
 
-    out = _run(QueryRequest(question="q", hybrid=False), use_hybrid=False)
+    found = asyncio.run(_runner(hybrid=False).retrieve())
 
-    assert [c.content for c in out.chunks] == ["dense hit"]
+    assert [c.content for c in found.chunks] == ["dense hit"]
     assert called == {"search": 1, "hybrid": 0, "rerank": 0}
-    # dense-only path still traces what it retrieved
-    assert out.stage_chunks[STAGE_DENSE] == [hit]
+    assert found.stage_chunks[STAGE_DENSE] == [hit]
 
 
 def test_missing_sparse_vector_falls_back_to_dense(monkeypatch):
@@ -84,36 +87,34 @@ def test_missing_sparse_vector_falls_back_to_dense(monkeypatch):
         called["hybrid"] += 1
         return HybridResult([], [], [])
 
-    monkeypatch.setattr(qr.retrieve, "search", fake_search)
-    monkeypatch.setattr(qr.retrieve, "hybrid_search", fake_hybrid)
+    monkeypatch.setattr(pipeline.retrieve, "search", fake_search)
+    monkeypatch.setattr(pipeline.retrieve, "hybrid_search", fake_hybrid)
 
-    out = _run(QueryRequest(question="q"), use_hybrid=True, sparse=None)
+    found = asyncio.run(_runner(hybrid=True, sparse=None).retrieve())
 
-    assert [c.content for c in out.chunks] == ["dense hit"]
+    assert [c.content for c in found.chunks] == ["dense hit"]
     assert called == {"search": 1, "hybrid": 0}
 
 
 def test_hybrid_path_reranks_and_truncates(monkeypatch):
     candidates = [_chunk(f"c{i}") for i in range(5)]
-    dense_ids = [c.chunk_id for c in candidates]
-    sparse_ids = [candidates[0].chunk_id]
 
     async def fake_hybrid(session, dense, sparse, *, user_id, document_id=None):
-        assert user_id == USER_ID
-        return HybridResult(candidates, dense_ids, sparse_ids)
+        assert user_id == USER.id
+        return HybridResult(candidates, [c.chunk_id for c in candidates], [])
 
     async def fake_rerank(question, texts):
         # deliberately not in candidate order; the pipeline must honour it
         return [(3, 9.0), (1, 8.0), (4, 7.0), (0, 6.0), (2, 5.0)]
 
-    monkeypatch.setattr(qr.retrieve, "hybrid_search", fake_hybrid)
-    monkeypatch.setattr(qr.rerank, "rerank", fake_rerank)
-    monkeypatch.setattr(qr.settings, "rerank_top", 3)
+    monkeypatch.setattr(pipeline.retrieve, "hybrid_search", fake_hybrid)
+    monkeypatch.setattr(pipeline.rerank, "rerank", fake_rerank)
+    monkeypatch.setattr(pipeline.settings, "rerank_top", 3)
 
-    out = _run(QueryRequest(question="q", hybrid=True), use_hybrid=True)
+    found = asyncio.run(_runner(hybrid=True).retrieve())
 
-    assert [c.content for c in out.chunks] == ["c3", "c1", "c4"]  # top-3 by reranker
-    assert [c.score for c in out.chunks] == [9.0, 8.0, 7.0]  # reranker scores
+    assert [c.content for c in found.chunks] == ["c3", "c1", "c4"]
+    assert [c.score for c in found.chunks] == [9.0, 8.0, 7.0]
 
 
 def test_hybrid_path_records_every_stage(monkeypatch):
@@ -128,20 +129,20 @@ def test_hybrid_path_records_every_stage(monkeypatch):
     async def fake_rerank(question, texts):
         return [(1, 5.0), (0, 4.0), (2, 3.0), (3, 2.0)]
 
-    monkeypatch.setattr(qr.retrieve, "hybrid_search", fake_hybrid)
-    monkeypatch.setattr(qr.rerank, "rerank", fake_rerank)
-    monkeypatch.setattr(qr.settings, "rerank_top", 2)
+    monkeypatch.setattr(pipeline.retrieve, "hybrid_search", fake_hybrid)
+    monkeypatch.setattr(pipeline.rerank, "rerank", fake_rerank)
+    monkeypatch.setattr(pipeline.settings, "rerank_top", 2)
 
-    out = _run(QueryRequest(question="q", hybrid=True), use_hybrid=True)
+    found = asyncio.run(_runner(hybrid=True).retrieve())
 
-    assert out.stage_ids[STAGE_DENSE] == dense_ids
-    assert out.stage_ids[STAGE_SPARSE] == sparse_ids
-    assert out.stage_chunks[STAGE_RRF] == candidates  # full candidate set
-    assert [c.content for c in out.stage_chunks[STAGE_RERANK]] == ["c1", "c0"]
-    # A chunk retrieved but dropped by reranking stays visible in earlier stages.
+    assert found.stage_ids[STAGE_DENSE] == dense_ids
+    assert found.stage_ids[STAGE_SPARSE] == sparse_ids
+    assert found.stage_chunks[STAGE_RRF] == candidates
+    assert [c.content for c in found.stage_chunks[STAGE_RERANK]] == ["c1", "c0"]
+    # A chunk retrieved but dropped by reranking stays visible upstream.
     dropped = candidates[3].chunk_id
-    assert dropped in out.stage_ids[STAGE_DENSE]
-    assert dropped not in [c.chunk_id for c in out.stage_chunks[STAGE_RERANK]]
+    assert dropped in found.stage_ids[STAGE_DENSE]
+    assert dropped not in [c.chunk_id for c in found.stage_chunks[STAGE_RERANK]]
 
 
 def test_hybrid_path_no_candidates_skips_rerank(monkeypatch):
@@ -151,12 +152,18 @@ def test_hybrid_path_no_candidates_skips_rerank(monkeypatch):
     async def fake_rerank(question, texts):
         raise AssertionError("rerank must not run with zero candidates")
 
-    monkeypatch.setattr(qr.retrieve, "hybrid_search", fake_hybrid)
-    monkeypatch.setattr(qr.rerank, "rerank", fake_rerank)
+    monkeypatch.setattr(pipeline.retrieve, "hybrid_search", fake_hybrid)
+    monkeypatch.setattr(pipeline.rerank, "rerank", fake_rerank)
 
-    out = _run(QueryRequest(question="q", hybrid=True), use_hybrid=True)
-    assert out.chunks == []
-    assert out.stage_chunks == {}
+    found = asyncio.run(_runner(hybrid=True).retrieve())
+    assert found.chunks == []
+    assert found.stage_chunks == {}
+
+
+def test_grounding_floor_differs_by_path():
+    """Cosine and reranker sigmoid are different quantities."""
+    assert _runner(hybrid=True).grounding_floor == pipeline.settings.rerank_min_score
+    assert _runner(hybrid=False).grounding_floor is None
 
 
 def test_stopwatch_records_stage_latency():
