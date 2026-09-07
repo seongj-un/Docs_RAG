@@ -239,6 +239,75 @@ class TraceChunk(Base):
     trace: Mapped["Trace"] = relationship(back_populates="chunks")
 
 
+class Conversation(Base):
+    """A chat thread. Groups messages so the sidebar can list past sessions.
+
+    ``scope_document_id`` remembers which document the thread was scoped to.
+    It is SET NULL rather than CASCADE on document deletion: the conversation
+    is the user's record of what they asked, and losing the whole thread
+    because its document was removed would destroy that history.
+    """
+
+    __tablename__ = "conversations"
+    __table_args__ = (
+        Index("conversations_user_created_idx", "user_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scope_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("documents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    messages: Mapped[list["Message"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="Message.created_at",
+    )
+
+
+class Message(Base):
+    """One turn in a conversation.
+
+    ``citations`` stores the footnote mapping (number -> chunk id, page) as
+    written at answer time, so reopening an old thread shows the same evidence
+    even after the underlying chunks change or the document is deleted.
+    """
+
+    __tablename__ = "messages"
+    __table_args__ = (
+        Index("messages_conversation_idx", "conversation_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[str] = mapped_column(Text, nullable=False)  # user | assistant
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    citations: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    refused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    conversation: Mapped["Conversation"] = relationship(back_populates="messages")
+
+
 class QueryCache(Base):
     """Semantic cache: a past answer keyed by the question's embedding.
 

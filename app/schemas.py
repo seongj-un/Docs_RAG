@@ -66,6 +66,42 @@ class QueryResponse(BaseModel):
     citations: list[Citation]
 
 
+class ConversationCreate(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    scope_document_id: uuid.UUID | None = None
+
+
+class ConversationSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    title: str | None = None
+    scope_document_id: uuid.UUID | None = None
+    created_at: datetime | None = None
+
+
+class MessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    role: str
+    content: str
+    citations: list[Citation] | None = None
+    refused: bool
+    created_at: datetime | None = None
+
+
+class ConversationDetail(ConversationSummary):
+    messages: list[MessageOut] = []
+
+
+class ConversationQuery(BaseModel):
+    question: str = Field(..., min_length=1)
+    # Overrides the conversation's stored scope for this turn only.
+    document_id: uuid.UUID | None = None
+    hybrid: bool | None = None
+
+
 class TraceSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
