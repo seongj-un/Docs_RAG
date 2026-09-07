@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     # over plain HTTP. Left false so local http://localhost development works.
     session_cookie_secure: bool = False
     session_cookie_samesite: str = "lax"
+    # M5 frontend runs on its own origin and must send the session cookie, so
+    # credentials are allowed — which forbids a "*" origin. List them exactly.
+    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
     # --- M3 Phase 2: abuse & cost defense ---
     # Rate limits are per-process token buckets (see services/ratelimit.py):

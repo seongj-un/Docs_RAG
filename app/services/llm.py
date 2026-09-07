@@ -5,6 +5,7 @@ lazily so importing this module never requires an API key (imports run at app
 startup and in tests without secrets).
 """
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -51,4 +52,40 @@ async def generate(
         text=(resp.text or "").strip(),
         tokens_in=getattr(meta, "prompt_token_count", 0) or 0,
         tokens_out=getattr(meta, "candidates_token_count", 0) or 0,
+    )
+
+
+async def generate_stream(
+    system_prompt: str, user_prompt: str, *, model: str | None = None
+) -> AsyncIterator[str | Generation]:
+    """Yield text chunks as they arrive, then a final ``Generation``.
+
+    The terminal value carries the full text and token usage, which only the
+    last chunk reports — callers stream the strings and use the ``Generation``
+    for persistence and accounting.
+    """
+    client = _client()
+    stream = await client.aio.models.generate_content_stream(
+        model=model or settings.llm_model,
+        contents=user_prompt,
+        config=genai.types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=0.0,
+        ),
+    )
+
+    parts: list[str] = []
+    tokens_in = tokens_out = 0
+    async for chunk in stream:
+        meta = getattr(chunk, "usage_metadata", None)
+        if meta is not None:
+            tokens_in = getattr(meta, "prompt_token_count", 0) or tokens_in
+            tokens_out = getattr(meta, "candidates_token_count", 0) or tokens_out
+        text = getattr(chunk, "text", None)
+        if text:
+            parts.append(text)
+            yield text
+
+    yield Generation(
+        text="".join(parts).strip(), tokens_in=tokens_in, tokens_out=tokens_out
     )
