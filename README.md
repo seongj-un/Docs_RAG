@@ -21,7 +21,7 @@ docker compose up -d     # db · 모델 · 앱 · 프록시
 curl http://localhost:8088/health
 ```
 
-첫 기동은 모델 가중치 약 4.6GB를 받는다(`hf-cache` 볼륨에 남아 이후엔 즉시).
+첫 기동은 모델 가중치를 받는다(`hf-cache` 볼륨에 약 6.9GB로 남아 이후엔 즉시).
 그동안에도 앱은 이미 떠 있고, 질의는 503 `search unavailable`로 답한다 —
 모델을 기다리느라 스택 전체가 멎지는 않는다.
 
@@ -38,7 +38,7 @@ curl http://localhost:8088/health
 돌리려면 아래 "로컬 GPU 모델 서버"를 쓴다.
 
 정리는 `docker compose down`. **`-v`는 붙이지 말 것** — `pgdata`(DB)·
-`hf-cache`(가중치 4.6GB)·`uploads`(업로드 원본)가 함께 사라진다.
+`hf-cache`(가중치 6.9GB)·`uploads`(업로드 원본)가 함께 사라진다.
 
 ## 개발 실행
 

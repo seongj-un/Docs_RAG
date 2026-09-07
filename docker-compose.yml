@@ -1,6 +1,6 @@
 # Full stack: `docker compose up` brings up the database, both models, the API
-# and the proxy. The first start downloads ~4.6GB of model weights into the
-# hf-cache volume; later starts reuse it.
+# and the proxy. The first start downloads the model weights into the hf-cache
+# volume (~6.9GB on disk); later starts reuse it.
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -20,11 +20,16 @@ services:
       timeout: 3s
       retries: 20
 
-  # BGE-M3 + bge-reranker-v2-m3 on CPU. Measured on this machine: embedding is
-  # comfortable there (116ms per query) while reranking is not — 16.7s at the
-  # old CAND_K=50. The CAND_K sweep (eval/candk_sweep.py) found 50 -> 5 costs
-  # no measurable quality, which brings CPU reranking to roughly 1.7s and makes
-  # this service viable without a GPU. Set CAND_K accordingly when running here.
+  # BGE-M3 + bge-reranker-v2-m3 on CPU. Reranking is what decides whether this
+  # is usable without a GPU, and it is roughly linear in candidate count.
+  # Measured in this container (best of 3, OMP_NUM_THREADS=4):
+  #
+  #     CAND_K   5 ->  2.0s      20 ->  4.8s
+  #             10 ->  2.6s      50 -> 11.9s   (current default)
+  #
+  # The CAND_K sweep (eval/candk_sweep.py) found 50 -> 5 costs no measurable
+  # retrieval quality, so the knob is available. Pick it here, not from the
+  # host benchmark: a container on macOS runs in a VM and does not match it.
   models:
     # Tagged so there is something to roll back *to*. Without an explicit
     # image name compose overwrites one implicit :latest on every build, and

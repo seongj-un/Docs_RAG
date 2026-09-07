@@ -25,8 +25,8 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
 COPY scripts/local_model_server.py ./scripts/local_model_server.py
 COPY scripts/__init__.py ./scripts/__init__.py
 
-# Weights (~4.6GB) are not baked in: they would quadruple the image and change
-# on their own schedule. They land in the hf-cache volume on first start, so
+# Weights (~6.9GB on disk) are not baked in: they would quadruple the image and
+# change on their own schedule. They land in the hf-cache volume on first start, so
 # only the first `docker compose up` pays for the download.
 RUN useradd --create-home --uid 10002 models \
  && mkdir -p /opt/hf && chown -R models:models /opt/hf /srv
