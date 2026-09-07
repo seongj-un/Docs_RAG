@@ -124,7 +124,7 @@ def print_disagreements(rows: list[dict]) -> None:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--corpus", default="hard", choices=("simple", "hard", "longchunk"))
+    parser.add_argument("--corpus", default="hard", choices=("simple", "hard", "longchunk", "wide"))
     parser.add_argument("--k", type=int, default=5, help="cutoff for R@k / nDCG@k")
     args = parser.parse_args()
 
