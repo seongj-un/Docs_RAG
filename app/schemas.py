@@ -169,3 +169,48 @@ class TraceChunkOut(BaseModel):
 class TraceDetail(TraceSummary):
     answer: str | None = None
     chunks: list[TraceChunkOut] = []
+
+
+class Percentiles(BaseModel):
+    """Median and tail for one stage. Absent when nothing was recorded."""
+
+    p50: int | None = None
+    p95: int | None = None
+
+
+class QueryStats(BaseModel):
+    total: int
+    cached: int
+    refused: int
+
+
+class DocumentStats(BaseModel):
+    ready: int = 0
+    processing: int = 0
+    pending: int = 0
+    failed: int = 0
+
+
+class FailureReason(BaseModel):
+    """A failure class and how often it happened.
+
+    Grouped by the error's leading token rather than the whole message, since
+    the tail carries file names and ids that would split one cause into many.
+    """
+
+    reason: str
+    count: int
+
+
+class AdminStats(BaseModel):
+    window_hours: int
+    queries: QueryStats
+    # Latency of what users actually waited for, cache hits included.
+    total_ms: Percentiles
+    # Where the time went, cache hits excluded — a hit skips embed/rerank and
+    # generation entirely, so mixing the two makes every stage look fast.
+    stages: dict[str, Percentiles]
+    tokens_in: int
+    tokens_out: int
+    documents: DocumentStats
+    failures: list[FailureReason]

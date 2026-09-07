@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     # Storage (M1: local disk)
     storage_dir: str = "./storage"
 
+    # Operational statistics endpoint. Empty disables it entirely — the route
+    # then 404s rather than 401s, so an unconfigured deployment does not
+    # advertise that an admin surface exists at all.
+    admin_token: str = ""
+
     # --- M3: auth & tenant isolation ---
     session_cookie_name: str = "session_id"
     session_ttl_days: int = 14
