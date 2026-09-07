@@ -16,6 +16,7 @@ import httpx
 from pgvector import SparseVector
 
 from app.config import settings
+from app.services.upstream import calling
 
 # TEI truncates transparently, but we cap batch size to keep request bodies
 # and GPU memory bounded on larger documents.
@@ -30,12 +31,13 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
 
     url = settings.tei_url.rstrip("/") + "/embed"
     out: list[list[float]] = []
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        for start in range(0, len(texts), _BATCH_SIZE):
-            batch = texts[start : start + _BATCH_SIZE]
-            resp = await client.post(url, json={"inputs": batch})
-            resp.raise_for_status()
-            out.extend(resp.json())
+    with calling("embedding"):
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            for start in range(0, len(texts), _BATCH_SIZE):
+                batch = texts[start : start + _BATCH_SIZE]
+                resp = await client.post(url, json={"inputs": batch})
+                resp.raise_for_status()
+                out.extend(resp.json())
 
     if len(out) != len(texts):
         raise RuntimeError(f"TEI returned {len(out)} embeddings for {len(texts)} inputs")
@@ -58,8 +60,8 @@ async def embed_full(
 ) -> tuple[list[list[float]], list[SparseVector]]:
     """Return (dense_vectors, sparse_vectors) for texts, order preserved.
 
-    Uses ``/embed_full``. Raises on a non-2xx response so ingest can mark the
-    document ``failed``.
+    Uses ``/embed_full``. A server that does not answer raises
+    ``UpstreamUnavailable`` so ingest can mark the document ``failed``.
     """
     if not texts:
         return [], []
@@ -67,14 +69,15 @@ async def embed_full(
     url = settings.tei_url.rstrip("/") + "/embed_full"
     dense: list[list[float]] = []
     sparse: list[SparseVector] = []
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        for start in range(0, len(texts), _BATCH_SIZE):
-            batch = texts[start : start + _BATCH_SIZE]
-            resp = await client.post(url, json={"inputs": batch})
-            resp.raise_for_status()
-            payload = resp.json()
-            dense.extend(payload["dense"])
-            sparse.extend(_to_sparsevec(s) for s in payload["sparse"])
+    with calling("embedding"):
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            for start in range(0, len(texts), _BATCH_SIZE):
+                batch = texts[start : start + _BATCH_SIZE]
+                resp = await client.post(url, json={"inputs": batch})
+                resp.raise_for_status()
+                payload = resp.json()
+                dense.extend(payload["dense"])
+                sparse.extend(_to_sparsevec(s) for s in payload["sparse"])
 
     if len(dense) != len(texts) or len(sparse) != len(texts):
         raise RuntimeError(

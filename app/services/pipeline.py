@@ -12,6 +12,7 @@ question once instead of threading a dozen arguments through every step.
 """
 
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from fastapi import HTTPException
@@ -22,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.models import User
 from app.services import cache, embeddings, ingest, rerank, retrieve, tracing, usage
+from app.services.upstream import UpstreamUnavailable
 from app.services.ratelimit import query_limiter
 from app.services.tracing import (
     STAGE_DENSE,
@@ -51,6 +53,27 @@ def too_many(detail: str) -> HTTPException:
 NOT_FOUND = HTTPException(
     status_code=http_status.HTTP_404_NOT_FOUND, detail="not found"
 )
+
+
+@contextmanager
+def _reachable():
+    """Report a model server being down as 503, not as this service crashing.
+
+    Both query paths run through here, so neither can report an outage
+    differently from the other. The clients raise a domain error precisely so
+    the translation happens once, at the boundary that has a response to put
+    it in — background indexing has none, and records the failure instead.
+
+    No ``Retry-After``: nothing here knows when the server comes back, and
+    unlike a provider quota it usually takes someone restarting it.
+    """
+    try:
+        yield
+    except UpstreamUnavailable as exc:
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="search unavailable",
+        ) from exc
 
 
 class QueryRunner:
@@ -105,12 +128,13 @@ class QueryRunner:
     async def embed(self) -> None:
         """Embed once; the dense vector serves the cache probe and retrieval."""
         async with self.watch.time("embed"):
-            if self.use_hybrid:
-                self.dense, self.sparse = await embeddings.embed_query_full(
-                    self.question
-                )
-            else:
-                self.dense = await embeddings.embed_query(self.question)
+            with _reachable():
+                if self.use_hybrid:
+                    self.dense, self.sparse = await embeddings.embed_query_full(
+                        self.question
+                    )
+                else:
+                    self.dense = await embeddings.embed_query(self.question)
 
     async def cached_answer(self) -> cache.CachedAnswer | None:
         return await cache.lookup(
@@ -153,9 +177,10 @@ class QueryRunner:
             return Retrieval([], stage_ids, {})
 
         async with self.watch.time("rerank"):
-            ranked = await rerank.rerank(
-                self.question, [c.content for c in fused.candidates]
-            )
+            with _reachable():
+                ranked = await rerank.rerank(
+                    self.question, [c.content for c in fused.candidates]
+                )
         top: list[retrieve.RetrievedChunk] = []
         for idx, score in ranked[: settings.rerank_top]:
             chunk = fused.candidates[idx]

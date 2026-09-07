@@ -13,6 +13,7 @@ Wire format mirrors TEI:
 import httpx
 
 from app.config import settings
+from app.services.upstream import calling
 
 _TIMEOUT = httpx.Timeout(120.0)
 
@@ -36,10 +37,11 @@ async def rerank(query: str, texts: list[str]) -> list[tuple[int, float]]:
         texts = [text[:limit] for text in texts]
 
     url = settings.rerank_url.rstrip("/") + "/rerank"
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(url, json={"query": query, "texts": texts})
-        resp.raise_for_status()
-        data = resp.json()
+    with calling("rerank"):
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(url, json={"query": query, "texts": texts})
+            resp.raise_for_status()
+            data = resp.json()
 
     ranked = [(int(d["index"]), float(d["score"])) for d in data]
     ranked.sort(key=lambda t: t[1], reverse=True)
