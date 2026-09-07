@@ -54,6 +54,10 @@ class Settings(BaseSettings):
 
     # Generation LLM (Gemini)
     llm_provider: str = "gemini"
+    # ⚠️ 무료 티어에서는 이 모델을 대화형으로 쓸 수 없다 — 실측으로 한 문장
+    # 응답에 34~40초, 그리고 하루 20회에서 429. 같은 요청이 flash-lite 로는
+    # 0.9초다. 무료 키로 돌린다면 LLM_MODEL 을 gemini-3.1-flash-lite 로 두고,
+    # 유료 티어에서 이 기본값으로 돌아올 것.
     llm_model: str = "gemini-3.6-flash"
     # Evaluation runs on a separate, lighter model. The flagship Flash tier
     # allows only 20 requests/day free, which a 36-question sweep exhausts

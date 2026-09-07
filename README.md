@@ -206,7 +206,7 @@ per-IP rate limit이 `request.client.host`를 쓴다. 프록시를 붙이면 그
 | `DATABASE_URL` | localhost:5432 | Postgres |
 | `TEI_URL` · `RERANK_URL` | :8080 · :8081 | 임베딩·리랭커 서버 |
 | `GEMINI_API_KEY` | — | 필수 |
-| `LLM_MODEL` | `gemini-3.6-flash` | 생성 모델 |
+| `LLM_MODEL` | `gemini-3.6-flash` | 생성 모델. **무료 티어라면 `gemini-3.1-flash-lite` 로 바꿀 것** — 아래 참조 |
 | `EVAL_LLM_MODEL` | `gemini-3.1-flash-lite` | 평가용. 무료 티어가 `3.6-flash`는 **하루 20회**라 분리했다 |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | 700 / 100 | 토큰 단위 |
 | `CAND_K` | 50 | 리랭커에 넘길 후보 수 (아래 평가 참조) |
@@ -218,6 +218,21 @@ per-IP rate limit이 `request.client.host`를 쓴다. 프록시를 붙이면 그
 
 > `MIN_SCORE`(코사인)를 리랭커 시그모이드에 재사용했다가 답변 가능한 질문의
 > 21%를 LLM 호출도 없이 거부한 적이 있다. 두 점수는 같은 양이 아니다.
+
+### 무료 티어에서 생성 모델 고르기
+
+기본값 `gemini-3.6-flash` 는 **무료 티어에서 대화형으로 쓸 수 없다.** 실측:
+
+| 모델 | 한 문장 응답 | 무료 한도 |
+| --- | --- | --- |
+| `gemini-3.6-flash` | 34\~40초 | 하루 20회 |
+| `gemini-3.1-flash-lite` | 0.9초 | 훨씬 넉넉 |
+
+무료 키로 돌린다면 `LLM_MODEL=gemini-3.1-flash-lite`. 이 값으로 30쪽 문서
+요약이 스트리밍 13.2초에 끝난다(같은 질의가 3.6-flash 에서는 59초 만에
+503 `model unavailable` 로 실패했다). 유료 티어로 가면 기본값으로 돌아오면 된다.
+
+`EVAL_LLM_MODEL` 이 이미 flash-lite 인 것도 같은 이유다(M4).
 
 ## 테스트
 
