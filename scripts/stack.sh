@@ -55,14 +55,32 @@ down)
     # -v 는 절대 붙이지 않는다: pgdata(DB) · hf-cache(가중치 6.9GB) ·
     # uploads(업로드 원본) 가 함께 사라진다.
     docker compose down
-    if model_up; then
+    if pgrep -f "scripts.local_model_server" >/dev/null 2>&1; then
         echo "모델 서버 정지"
         pkill -f "scripts.local_model_server" || true
+        # 신호만 보내고 끝내면 안 된다. 토치 정리에 시간이 걸려 프로세스가
+        # 잠시 남고, 곧바로 status 를 보면 아직 떠 있는 것처럼 보이며,
+        # 곧바로 up 을 하면 포트를 두고 새 서버와 경합한다.
+        for _ in $(seq 1 30); do
+            pgrep -f "scripts.local_model_server" >/dev/null 2>&1 || break
+            sleep 1
+        done
+        if pgrep -f "scripts.local_model_server" >/dev/null 2>&1; then
+            echo "  정상 종료하지 않아 강제 종료"
+            pkill -9 -f "scripts.local_model_server" || true
+        fi
     fi
     echo "완료 — 볼륨은 그대로. 다시 올리려면 scripts/stack.sh up"
     ;;
 status)
-    model_up && echo "모델 서버(:$MODEL_PORT)  UP" || echo "모델 서버(:$MODEL_PORT)  DOWN"
+    if model_up; then
+        echo "모델 서버(:$MODEL_PORT)  UP"
+    elif pgrep -f "scripts.local_model_server" >/dev/null 2>&1; then
+        # 포트는 닫혔는데 프로세스가 남아 있는 구간이 실제로 존재한다.
+        echo "모델 서버(:$MODEL_PORT)  종료 중"
+    else
+        echo "모델 서버(:$MODEL_PORT)  DOWN"
+    fi
     docker compose ps --format "  {{.Service}}  {{.Status}}"
     curl -sf -m 3 "http://localhost:$HTTP_PORT/api/health" >/dev/null 2>&1 \
         && echo "앱(:$HTTP_PORT)  UP" || echo "앱(:$HTTP_PORT)  DOWN"
