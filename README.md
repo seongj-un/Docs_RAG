@@ -100,6 +100,18 @@ npm --prefix web test   # 각주 매핑 등 프론트 순수 로직
 python -m eval.run --corpus hard   # 40p·20질의, 혼동 후보 포함 (판별력 있음)
 python -m eval.run --corpus simple # 15p·15질의, 전 구성 만점 = 판별 불가(음성 대조군)
 ```
+
+### 리랭커 입력 자르기 (`RERANK_MAX_CHARS`)
+
+리랭킹 비용은 입력 길이에 선형이라 자르기가 가장 큰 지연 지렛대지만,
+**측정 결과 품질을 깨뜨려서 기본값은 0(끔)이다.**
+```bash
+python -m eval.rerank_truncation --corpus longchunk  # 사실 위치별 손실 측정
+python -m eval.rerank_truncation --corpus hard       # 음성 대조군
+```
+`longchunk`은 이 실험을 위해 만든 코퍼스다. 다른 코퍼스는 조항이 전부
+128자 미만이라 **자르기가 아무 일도 하지 않아** 손실을 측정할 수 없다.
+깊이별로 나눠 읽을 것 — 평균은 효과를 가린다. 결과는 Notion M6 페이지 참조.
 Postgres + 임베딩/리랭커 서버(`TEI_URL`, `RERANK_URL`)가 필요하다.
 결과 해석은 Notion M2 페이지의 D18 항목 참조.
 
