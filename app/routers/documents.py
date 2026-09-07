@@ -34,6 +34,22 @@ def _storage_path(document_id: uuid.UUID, filename: str) -> str:
     return os.path.join(settings.storage_dir, f"{document_id}_{safe}")
 
 
+def _discard_stored_file(document_id: uuid.UUID, filename: str) -> None:
+    """Delete the uploaded PDF that belonged to a now-deleted document.
+
+    Called after the row is gone, and never allowed to fail the request: the
+    document is already deleted as far as the user is concerned, and turning
+    that into a 500 would invite a retry that 404s. A file left behind is a
+    leak to clean up, not a reason to report the delete as failed.
+    """
+    try:
+        os.remove(_storage_path(document_id, filename))
+    except FileNotFoundError:
+        pass  # never written (indexed from a path) or already removed
+    except OSError:
+        pass  # permissions, read-only mount — the row is still gone
+
+
 def _page_count(data: bytes) -> int | None:
     """Page count, or None if the bytes are not a readable PDF.
 
@@ -142,8 +158,12 @@ async def delete_document(
     doc = await ingest.get_document(session, document_id, user_id=user.id)
     if doc is None:
         raise _NOT_FOUND
+    stored = (doc.id, doc.filename)  # read before the row goes away
     await session.delete(doc)  # chunks and document-scoped cache cascade
     await session.commit()
+    # The row is authoritative, so it goes first; the file follows. Doing it
+    # the other way round could leave a document pointing at nothing.
+    _discard_stored_file(*stored)
     # Corpus-wide cached answers were computed over a corpus that no longer
     # exists; no foreign key covers them, so drop them explicitly.
     await cache.invalidate_corpus_wide(session, user.id)
