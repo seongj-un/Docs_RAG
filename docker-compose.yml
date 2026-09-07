@@ -26,6 +26,10 @@ services:
   # no measurable quality, which brings CPU reranking to roughly 1.7s and makes
   # this service viable without a GPU. Set CAND_K accordingly when running here.
   models:
+    # Tagged so there is something to roll back *to*. Without an explicit
+    # image name compose overwrites one implicit :latest on every build, and
+    # the previous version stops existing.
+    image: docs-rag-models:${MODELS_TAG:-dev}
     build:
       context: .
       dockerfile: Dockerfile.models
@@ -58,6 +62,7 @@ services:
               capabilities: [gpu]
 
   app:
+    image: docs-rag-app:${APP_TAG:-dev}
     build:
       context: .
       dockerfile: Dockerfile

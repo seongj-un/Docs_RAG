@@ -293,6 +293,20 @@ docker compose exec -T db pg_restore -U postgres -d docs_rag --no-owner /tmp/r.d
 docker compose start app
 ```
 
+### 배포와 롤백
+
+```bash
+scripts/release.sh            # 현재 커밋 SHA 로 이미지 빌드·태그
+APP_TAG=<태그> MODELS_TAG=<태그> docker compose up -d      # 배포
+APP_TAG=<이전태그> MODELS_TAG=<이전태그> docker compose up -d  # 롤백
+```
+
+돌아갈 이미지가 **이름을 갖고 있어야** 롤백이 성립한다. `docker compose build`
+만 쓰면 암묵적인 태그 하나를 매번 덮어써서 이전 버전이 사라진다. 그래서
+compose에 `image:`를 명시하고, release 스크립트가 커밋 SHA로 태그를 남긴다.
+워킹트리가 더러우면 거절한다 — SHA가 이미지 내용을 설명하지 못하면 롤백
+대상이 재현 불가능해진다.
+
 ## 마일스톤
 
 | | 내용 | 상태 |
