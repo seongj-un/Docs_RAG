@@ -42,6 +42,8 @@ class Answer:
     answer: str
     refused: bool
     citations: list[Citation]
+    tokens_in: int = 0
+    tokens_out: int = 0
 
 
 def _snippet(text: str, limit: int = 240) -> str:
@@ -78,10 +80,14 @@ async def answer_question(question: str, chunks: list[RetrievedChunk]) -> Answer
 
     context = _build_context(grounded)
     user_prompt = f"질문: {question}\n\n컨텍스트:\n{context}"
-    output = await llm.generate(SYSTEM_PROMPT, user_prompt)
+    result = await llm.generate(SYSTEM_PROMPT, user_prompt)
+    text = result.text
 
-    refused = (not output) or (REFUSAL_TEXT in output)
-    if refused:
-        return Answer(answer=output or REFUSAL_TEXT, refused=True, citations=[])
-
-    return Answer(answer=output, refused=False, citations=_citations(grounded))
+    refused = (not text) or (REFUSAL_TEXT in text)
+    return Answer(
+        answer=text or REFUSAL_TEXT,
+        refused=refused,
+        citations=[] if refused else _citations(grounded),
+        tokens_in=result.tokens_in,
+        tokens_out=result.tokens_out,
+    )

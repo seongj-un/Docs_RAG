@@ -5,11 +5,21 @@ lazily so importing this module never requires an API key (imports run at app
 startup and in tests without secrets).
 """
 
+from dataclasses import dataclass
 from functools import lru_cache
 
 from google import genai
 
 from app.config import settings
+
+
+@dataclass
+class Generation:
+    """Model output plus the token counts used for usage accounting."""
+
+    text: str
+    tokens_in: int = 0
+    tokens_out: int = 0
 
 
 @lru_cache(maxsize=1)
@@ -19,8 +29,8 @@ def _client() -> genai.Client:
     return genai.Client(api_key=settings.gemini_api_key)
 
 
-async def generate(system_prompt: str, user_prompt: str) -> str:
-    """Generate a completion. Returns the model's text output."""
+async def generate(system_prompt: str, user_prompt: str) -> Generation:
+    """Generate a completion, with token usage when the provider reports it."""
     client = _client()
     resp = await client.aio.models.generate_content(
         model=settings.llm_model,
@@ -30,4 +40,9 @@ async def generate(system_prompt: str, user_prompt: str) -> str:
             temperature=0.0,
         ),
     )
-    return (resp.text or "").strip()
+    meta = getattr(resp, "usage_metadata", None)
+    return Generation(
+        text=(resp.text or "").strip(),
+        tokens_in=getattr(meta, "prompt_token_count", 0) or 0,
+        tokens_out=getattr(meta, "candidates_token_count", 0) or 0,
+    )
