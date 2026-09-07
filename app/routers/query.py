@@ -1,8 +1,8 @@
 """Query endpoint.
 
-Request path (M3 Phase 2 adds the first two and the cache):
+Request path:
     rate limit -> quota -> embed -> [semantic cache hit? return] ->
-    retrieve -> rerank -> generate -> record usage -> store cache
+    retrieve -> rerank -> generate -> record usage -> store cache -> trace
 
 Two retrieval paths, selectable per-request or by ``HYBRID_ENABLED``:
 - hybrid (M2): dense+sparse -> RRF fusion -> cross-encoder rerank -> top-K.
@@ -11,9 +11,13 @@ Two retrieval paths, selectable per-request or by ``HYBRID_ENABLED``:
 Grounding/refusal is applied in ``generate`` against ``MIN_SCORE``; on the
 hybrid path that floor is applied to the reranker's relevance score, on the
 dense path to cosine similarity.
+
+Every request is traced (M4): per-stage latency plus the chunk ids each stage
+saw, which is what makes retrieval-vs-generation failures separable later.
 """
 
 import uuid
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi import status as http_status
@@ -25,8 +29,25 @@ from app.db import get_session
 from app.deps import get_current_user
 from app.models import User
 from app.schemas import Citation, QueryRequest, QueryResponse
-from app.services import cache, embeddings, generate, rerank, retrieve, usage
+from app.services import (
+    cache,
+    embeddings,
+    generate,
+    ingest,
+    rerank,
+    retrieve,
+    tracing,
+    usage,
+)
 from app.services.ratelimit import query_limiter
+from app.services.tracing import (
+    STAGE_DENSE,
+    STAGE_RERANK,
+    STAGE_RRF,
+    STAGE_SPARSE,
+    Stopwatch,
+    TraceDraft,
+)
 
 router = APIRouter(tags=["query"])
 
@@ -39,6 +60,13 @@ def _too_many(detail: str) -> HTTPException:
     )
 
 
+@dataclass
+class _Retrieval:
+    chunks: list[retrieve.RetrievedChunk]
+    stage_ids: dict[str, list[uuid.UUID]]
+    stage_chunks: dict[str, list[retrieve.RetrievedChunk]]
+
+
 async def _retrieve_chunks(
     session: AsyncSession,
     body: QueryRequest,
@@ -46,25 +74,37 @@ async def _retrieve_chunks(
     user_id: uuid.UUID,
     dense: list[float],
     sparse: SparseVector | None,
-) -> list[retrieve.RetrievedChunk]:
+    watch: Stopwatch,
+) -> _Retrieval:
     if not use_hybrid or sparse is None:
-        return await retrieve.search(
-            session, dense, user_id=user_id, document_id=body.document_id
+        async with watch.time("retrieve"):
+            hits = await retrieve.search(
+                session, dense, user_id=user_id, document_id=body.document_id
+            )
+        return _Retrieval(hits, {}, {STAGE_DENSE: hits})
+
+    async with watch.time("retrieve"):
+        fused = await retrieve.hybrid_search(
+            session, dense, sparse, user_id=user_id, document_id=body.document_id
         )
 
-    candidates = await retrieve.hybrid_search(
-        session, dense, sparse, user_id=user_id, document_id=body.document_id
-    )
-    if not candidates:
-        return []
+    stage_ids = {STAGE_DENSE: fused.dense_ids, STAGE_SPARSE: fused.sparse_ids}
+    if not fused.candidates:
+        return _Retrieval([], stage_ids, {})
 
-    ranked = await rerank.rerank(body.question, [c.content for c in candidates])
+    async with watch.time("rerank"):
+        ranked = await rerank.rerank(
+            body.question, [c.content for c in fused.candidates]
+        )
     top: list[retrieve.RetrievedChunk] = []
     for idx, score in ranked[: settings.rerank_top]:
-        chunk = candidates[idx]
+        chunk = fused.candidates[idx]
         chunk.score = score  # replace RRF score with reranker relevance
         top.append(chunk)
-    return top
+
+    return _Retrieval(
+        top, stage_ids, {STAGE_RRF: fused.candidates, STAGE_RERANK: top}
+    )
 
 
 @router.post("/query", response_model=QueryResponse)
@@ -83,14 +123,33 @@ async def query(
     if await usage.query_quota_exceeded(session, user.id):
         raise _too_many("daily query quota exceeded")
 
+    # A scope the caller does not own is 404 — same rule as the documents API,
+    # so a foreign document is indistinguishable from a missing one. Checked up
+    # front: it also avoids spending an embedding on an unusable scope, and
+    # keeps the cache from being keyed to a document that does not exist.
+    if body.document_id is not None:
+        owned = await ingest.get_document(session, body.document_id, user_id=user.id)
+        if owned is None:
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND, detail="not found"
+            )
+
     use_hybrid = body.hybrid if body.hybrid is not None else settings.hybrid_enabled
+    watch = Stopwatch()
+    draft = TraceDraft(
+        user_id=user.id,
+        question=body.question,
+        document_id=body.document_id,
+        hybrid=use_hybrid,
+    )
 
     # Embed once: the dense vector serves both the cache probe and retrieval.
     sparse: SparseVector | None = None
-    if use_hybrid:
-        dense, sparse = await embeddings.embed_query_full(body.question)
-    else:
-        dense = await embeddings.embed_query(body.question)
+    async with watch.time("embed"):
+        if use_hybrid:
+            dense, sparse = await embeddings.embed_query_full(body.question)
+        else:
+            dense = await embeddings.embed_query(body.question)
 
     hit = await cache.lookup(
         session,
@@ -101,14 +160,22 @@ async def query(
     if hit is not None:
         # Counts against the quota but costs no LLM call.
         await usage.record(session, user.id, "query", cached=True)
+        draft.cached = True
+        draft.refused = hit.refused
+        draft.answer = hit.answer
+        await tracing.record(session, draft, watch)
         return QueryResponse(
             answer=hit.answer,
             refused=hit.refused,
             citations=[Citation(**c) for c in hit.citations],
         )
 
-    chunks = await _retrieve_chunks(session, body, use_hybrid, user.id, dense, sparse)
-    result = await generate.answer_question(body.question, chunks)
+    found = await _retrieve_chunks(
+        session, body, use_hybrid, user.id, dense, sparse, watch
+    )
+
+    async with watch.time("generate"):
+        result = await generate.answer_question(body.question, found.chunks)
 
     citations = [
         Citation(
@@ -138,6 +205,15 @@ async def query(
         refused=result.refused,
         citations=[c.model_dump(mode="json") for c in citations],
     )
+
+    draft.refused = result.refused
+    draft.answer = result.answer
+    draft.llm_model = settings.llm_model
+    draft.tokens_in = result.tokens_in
+    draft.tokens_out = result.tokens_out
+    draft.stage_ids = found.stage_ids
+    draft.stage_chunks = found.stage_chunks
+    await tracing.record(session, draft, watch)
 
     return QueryResponse(
         answer=result.answer, refused=result.refused, citations=citations
