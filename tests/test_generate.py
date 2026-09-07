@@ -5,6 +5,7 @@ import uuid
 
 from app.config import settings
 from app.services import generate
+from app.services.llm import Generation
 from app.services.retrieve import RetrievedChunk
 
 
@@ -34,9 +35,9 @@ def test_below_min_score_refuses_without_calling_llm():
 
 
 def test_grounded_chunks_invoke_llm(monkeypatch):
-    async def fake_generate(system_prompt: str, user_prompt: str) -> str:
+    async def fake_generate(system_prompt: str, user_prompt: str) -> Generation:
         assert "컨텍스트" in user_prompt
-        return "답변입니다 [p.1]"
+        return Generation(text="답변입니다 [p.1]", tokens_in=11, tokens_out=7)
 
     monkeypatch.setattr(generate.llm, "generate", fake_generate)
 
@@ -45,11 +46,12 @@ def test_grounded_chunks_invoke_llm(monkeypatch):
     assert result.refused is False
     assert result.answer == "답변입니다 [p.1]"
     assert len(result.citations) == 1
+    assert (result.tokens_in, result.tokens_out) == (11, 7)  # usage propagates
 
 
 def test_llm_refusal_text_drops_citations(monkeypatch):
-    async def fake_generate(system_prompt: str, user_prompt: str) -> str:
-        return generate.REFUSAL_TEXT
+    async def fake_generate(system_prompt: str, user_prompt: str) -> Generation:
+        return Generation(text=generate.REFUSAL_TEXT)
 
     monkeypatch.setattr(generate.llm, "generate", fake_generate)
 
