@@ -29,6 +29,19 @@ alembic upgrade head          # 스키마 마이그레이션 (확장·테이블�
 uvicorn app.main:app --reload # 시작 시 마이그레이션 자동 적용도 됨
 ```
 
+### 임베딩·리랭킹 서버를 로컬 GPU로 (macOS/Apple Silicon)
+
+`docker compose`의 `tei`는 NVIDIA GPU를 요구한다. macOS 컨테이너에는 Metal이
+전달되지 않으므로, 맥에서는 도커 대신 호스트에서 직접 띄운다.
+
+```bash
+pip install -r requirements-bench.txt   # torch·FlagEmbedding (앱 의존성 아님)
+python -m scripts.local_model_server     # http://127.0.0.1:8081, MPS 자동 선택
+```
+`.env`에서 `TEI_URL`·`RERANK_URL`을 이 주소로 두면 앱 코드는 그대로다 —
+두 서버 모두 같은 `/embed`·`/embed_full`·`/rerank` 계약을 쓴다.
+앱은 torch를 임포트하지 않고 HTTP로만 부르므로 `requirements.txt`는 그대로 둔다.
+
 프론트엔드:
 ```bash
 cd web
