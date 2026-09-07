@@ -18,6 +18,7 @@ from sqlalchemy import select
 from eval import metrics, pdf
 from eval.corpora import load
 
+from app.constants import SEED_USER_ID
 from app.db import SessionLocal, engine
 from app.models import Chunk, Document
 from app.services import embeddings, ingest, rerank, retrieve
@@ -40,7 +41,14 @@ async def index_corpus(corpus, path: str, doc_name: str) -> uuid.UUID:
             await session.delete(doc)
         await session.commit()
 
-        doc = Document(filename=doc_name, mime_type="application/pdf", status="pending")
+        # Eval fixtures belong to the seed account (the same owner migration
+        # 0003 assigned pre-M3 documents to), so runs stay isolated from real users.
+        doc = Document(
+            user_id=SEED_USER_ID,
+            filename=doc_name,
+            mime_type="application/pdf",
+            status="pending",
+        )
         session.add(doc)
         await session.commit()
         await session.refresh(doc)
@@ -65,7 +73,9 @@ async def index_corpus(corpus, path: str, doc_name: str) -> uuid.UUID:
 
 async def dense_pages(session, question: str, doc_id: uuid.UUID, k: int) -> list[int]:
     embedding = await embeddings.embed_query(question)
-    hits = await retrieve.search(session, embedding, document_id=doc_id, top_k=k)
+    hits = await retrieve.search(
+        session, embedding, user_id=SEED_USER_ID, document_id=doc_id, top_k=k
+    )
     return [h.page_from for h in hits]
 
 
@@ -73,7 +83,9 @@ async def hybrid_pages(
     session, question: str, doc_id: uuid.UUID, k: int, do_rerank: bool
 ) -> list[int]:
     dense, sparse = await embeddings.embed_query_full(question)
-    candidates = await retrieve.hybrid_search(session, dense, sparse, document_id=doc_id)
+    candidates = await retrieve.hybrid_search(
+        session, dense, sparse, user_id=SEED_USER_ID, document_id=doc_id
+    )
     if not do_rerank:
         return [c.page_from for c in candidates[:k]]
     ranked = await rerank.rerank(question, [c.content for c in candidates])
