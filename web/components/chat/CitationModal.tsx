@@ -73,6 +73,12 @@ export function CitationModal({
                 type="button"
                 className={styles.tab}
                 data-active={footnote.number === active.number}
+                /* 지금 보여주는 근거로 포커스가 가야 보는 것과 듣는 것이
+                 * 맞는다. Modal이 이 표시를 보고 첫 포커스를 정한다. */
+                data-autofocus={
+                  footnote.number === active.number ? "" : undefined
+                }
+                aria-pressed={footnote.number === active.number}
                 onClick={() => onSelect(footnote.number)}
                 aria-label={`근거 ${footnote.number}번`}
               >

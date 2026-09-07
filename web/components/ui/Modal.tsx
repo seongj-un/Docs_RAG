@@ -55,10 +55,16 @@ export function Modal({
 
     restoreTo.current = document.activeElement as HTMLElement | null;
 
-    /* 열리면 첫 포커스 대상으로 들어간다. 비어 있으면 패널 자체가 받는다
-     * (패널은 tabIndex={-1}이라 프로그램 포커스만 허용된다). */
-    const first = focusables()[0] ?? panelRef.current;
-    first?.focus();
+    /* 열리면 첫 포커스 대상으로 들어간다. 다만 지금 보여주는 것이 첫
+     * 요소가 아닐 수 있다 — 각주 2번을 눌렀는데 포커스가 "근거 1번"에
+     * 가면 보는 것과 듣는 것이 어긋난다. 그래서 내용을 아는 쪽이
+     * data-autofocus로 지목할 수 있게 두고, 없으면 첫 요소로 간다.
+     * 둘 다 없으면 패널 자체가 받는다(tabIndex={-1}이라 프로그램 포커스만). */
+    const marked = panelRef.current?.querySelector<HTMLElement>(
+      "[data-autofocus]",
+    );
+    const target = marked ?? focusables()[0] ?? panelRef.current;
+    target?.focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {

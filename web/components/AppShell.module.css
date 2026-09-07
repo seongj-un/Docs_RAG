@@ -1,3 +1,26 @@
+/* 스킵 링크. 사이드바는 대화·문서가 늘수록 길어져서, 키보드 사용자가
+ * 본문에 닿기까지 수십 번 Tab을 눌러야 한다. 화면 밖에 두되 포커스를
+ * 받으면 나타나므로 마우스 사용자에게는 보이지 않는다. */
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 60;
+  padding: 9px 13px;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-control);
+  background: var(--raise);
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.skip:focus {
+  left: 9px;
+  top: 9px;
+}
+
 .shell {
   display: flex;
   height: 100vh;

@@ -82,6 +82,11 @@ export function AppShell({ children, crumb }: AppShellProps) {
 
   return (
     <div className={styles.shell}>
+      {/* 탭 순서의 맨 앞. 사이드바를 통째로 건너뛰어 대화로 간다. */}
+      <a className={styles.skip} href="#main">
+        본문으로 건너뛰기
+      </a>
+
       <aside
         className={styles.sidebar}
         data-collapsed={collapsed}
@@ -210,7 +215,11 @@ export function AppShell({ children, crumb }: AppShellProps) {
           </button>
           {crumb && <span className={styles.crumb}>{crumb}</span>}
         </div>
-        <div className={styles.content}>{children}</div>
+        {/* tabIndex={-1}이라야 앵커로 건너뛴 뒤 포커스가 실제로 여기 앉는다 —
+            없으면 스크롤만 되고 다음 Tab이 문서 처음으로 돌아간다. */}
+        <div id="main" className={styles.content} tabIndex={-1}>
+          {children}
+        </div>
       </div>
 
       <ConfirmDialog
