@@ -22,9 +22,18 @@ async def rerank(query: str, texts: list[str]) -> list[tuple[int, float]]:
 
     ``original_index`` refers to the position in the input ``texts`` list, so
     callers can map scores back to their candidate objects.
+
+    ``RERANK_MAX_CHARS`` shortens what is scored, not what is returned: the
+    indices still address the caller's full-length candidates. Truncation
+    lives here rather than at the call site so evaluation measures the same
+    input production sends.
     """
     if not texts:
         return []
+
+    limit = settings.rerank_max_chars
+    if limit:
+        texts = [text[:limit] for text in texts]
 
     url = settings.rerank_url.rstrip("/") + "/rerank"
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:

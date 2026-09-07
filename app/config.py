@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     # that gap. It is a cheap pre-filter, not the refusal decision: borderline
     # cases still reach the LLM, which is instructed to refuse ungrounded asks.
     rerank_min_score: float = 0.005
+    # Characters of each candidate sent to the cross-encoder. Reranking cost is
+    # linear in input length up to the model's own cut-off, so this is the
+    # largest single lever on query latency. 0 disables truncation.
+    # Only the scoring input is shortened — stored content, the generation
+    # context, and citation snippets are untouched.
+    rerank_max_chars: int = 0
 
     # Generation LLM (Gemini)
     llm_provider: str = "gemini"
