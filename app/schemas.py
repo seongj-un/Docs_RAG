@@ -64,3 +64,38 @@ class QueryResponse(BaseModel):
     answer: str
     refused: bool
     citations: list[Citation]
+
+
+class TraceSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    question: str
+    document_id: uuid.UUID | None = None
+    hybrid: bool
+    cached: bool
+    refused: bool
+    llm_model: str | None = None
+    tokens_in: int
+    tokens_out: int
+    embed_ms: int | None = None
+    retrieve_ms: int | None = None
+    rerank_ms: int | None = None
+    generate_ms: int | None = None
+    total_ms: int | None = None
+    created_at: datetime | None = None
+
+
+class TraceChunkOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    chunk_id: uuid.UUID
+    stage: str
+    rank: int
+    score: float | None = None
+    page_from: int | None = None
+
+
+class TraceDetail(TraceSummary):
+    answer: str | None = None
+    chunks: list[TraceChunkOut] = []

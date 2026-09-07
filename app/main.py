@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.db import run_migrations
-from app.routers import auth, documents, query
+from app.routers import auth, documents, query, traces
 
 
 @asynccontextmanager
@@ -23,6 +23,7 @@ app = FastAPI(title="Docs Q&A RAG (M1)", version="0.1.0", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(query.router)
+app.include_router(traces.router)
 
 
 @app.get("/health", tags=["health"])
