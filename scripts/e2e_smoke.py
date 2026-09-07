@@ -193,10 +193,13 @@ def run(base: str) -> int:
     check("A 목록에 B 문서 없음", "bob.pdf" not in a_list, f"A sees {a_list}")
 
     if have_embed and a_doc and b_doc:
-        r = bob.post("/query", json={"question": "관리비는 얼마인가요?",
-                                     "document_id": a_doc}).json()
-        check("B가 A의 document_id로 질의 → 거부(내용 미노출)",
-              r["refused"] and ALICE_ONLY not in r["answer"], f"refused={r['refused']}")
+        # An unowned scope is rejected up front, indistinguishable from a
+        # document that never existed.
+        resp = bob.post("/query", json={"question": "관리비는 얼마인가요?",
+                                        "document_id": a_doc})
+        check("B가 A의 document_id로 질의 → 404(존재 은닉)",
+              resp.status_code == 404 and ALICE_ONLY not in resp.text,
+              f"HTTP {resp.status_code}")
         r = bob.post("/query", json={"question": "자기부담금은 얼마인가요?"}).json()
         leaked = ALICE_ONLY in r["answer"] or any(
             ALICE_ONLY in c["snippet"] for c in r["citations"])

@@ -83,9 +83,10 @@ async def hybrid_pages(
     session, question: str, doc_id: uuid.UUID, k: int, do_rerank: bool
 ) -> list[int]:
     dense, sparse = await embeddings.embed_query_full(question)
-    candidates = await retrieve.hybrid_search(
+    fused = await retrieve.hybrid_search(
         session, dense, sparse, user_id=SEED_USER_ID, document_id=doc_id
     )
+    candidates = fused.candidates
     if not do_rerank:
         return [c.page_from for c in candidates[:k]]
     ranked = await rerank.rerank(question, [c.content for c in candidates])
