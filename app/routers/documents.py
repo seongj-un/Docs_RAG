@@ -1,4 +1,9 @@
-"""Document endpoints: upload, status, list, delete."""
+"""Document endpoints: upload, status, list, delete.
+
+All routes require authentication and operate only on the caller's own
+documents. A document owned by someone else answers 404, not 403, so the API
+never confirms that another user's document exists.
+"""
 
 import os
 import uuid
@@ -9,11 +14,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import get_session
-from app.models import Document
+from app.deps import get_current_user
+from app.models import Document, User
 from app.schemas import DocumentCreated, DocumentStatus
 from app.services import ingest
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+_NOT_FOUND = HTTPException(
+    status_code=http_status.HTTP_404_NOT_FOUND, detail="not found"
+)
 
 
 def _storage_path(document_id: uuid.UUID, filename: str) -> str:
@@ -26,6 +36,7 @@ def _storage_path(document_id: uuid.UUID, filename: str) -> str:
 async def upload_document(
     file: UploadFile,
     background: BackgroundTasks,
+    user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> DocumentCreated:
     if file.content_type not in ("application/pdf", "application/x-pdf"):
@@ -35,6 +46,7 @@ async def upload_document(
         )
 
     doc = Document(
+        user_id=user.id,
         filename=file.filename or "upload.pdf",
         mime_type=file.content_type,
         status="pending",
@@ -53,29 +65,32 @@ async def upload_document(
 
 @router.get("", response_model=list[DocumentStatus])
 async def list_documents(
+    user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[Document]:
-    return await ingest.list_documents(session)
+    return await ingest.list_documents(session, user_id=user.id)
 
 
 @router.get("/{document_id}", response_model=DocumentStatus)
 async def get_document(
     document_id: uuid.UUID,
+    user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Document:
-    doc = await ingest.get_document(session, document_id)
+    doc = await ingest.get_document(session, document_id, user_id=user.id)
     if doc is None:
-        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="not found")
+        raise _NOT_FOUND
     return doc
 
 
 @router.delete("/{document_id}", status_code=http_status.HTTP_204_NO_CONTENT)
 async def delete_document(
     document_id: uuid.UUID,
+    user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    doc = await ingest.get_document(session, document_id)
+    doc = await ingest.get_document(session, document_id, user_id=user.id)
     if doc is None:
-        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="not found")
+        raise _NOT_FOUND
     await session.delete(doc)  # chunks cascade
     await session.commit()

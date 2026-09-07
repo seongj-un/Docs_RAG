@@ -83,10 +83,26 @@ async def index_document(document_id: uuid.UUID, file_path: str) -> None:
                 await session.commit()
 
 
-async def get_document(session, document_id: uuid.UUID) -> Document | None:
-    return await session.get(Document, document_id)
+async def get_document(
+    session, document_id: uuid.UUID, *, user_id: uuid.UUID
+) -> Document | None:
+    """Fetch a document only if ``user_id`` owns it.
+
+    Returns None for both "missing" and "someone else's" so callers answer 404
+    either way and never reveal that another user's document exists.
+    """
+    result = await session.execute(
+        select(Document).where(
+            Document.id == document_id, Document.user_id == user_id
+        )
+    )
+    return result.scalars().first()
 
 
-async def list_documents(session) -> list[Document]:
-    result = await session.execute(select(Document).order_by(Document.created_at.desc()))
+async def list_documents(session, *, user_id: uuid.UUID) -> list[Document]:
+    result = await session.execute(
+        select(Document)
+        .where(Document.user_id == user_id)
+        .order_by(Document.created_at.desc())
+    )
     return list(result.scalars().all())
