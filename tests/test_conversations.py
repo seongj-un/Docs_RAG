@@ -335,3 +335,65 @@ def test_title_is_trimmed_on_a_word_boundary():
     title = _title_from(long)
     assert len(title) <= 61 and title.endswith("…")
     assert not title.rstrip("…").endswith(" ")
+
+
+def test_explicit_null_scope_means_every_document(monkeypatch):
+    """`document_id: null` is a choice, not an omission.
+
+    M5 requires switching a thread's scope between one document and the whole
+    corpus. Reading None as "unset" would make that one-way: a thread created
+    against a document could never ask across everything again.
+    """
+    _stub(monkeypatch)
+
+    async def scenario():
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            email = await _signup(client)
+
+            async with SessionLocal() as session:
+                user = await auth.get_user_by_email(session, email)
+                doc = Document(
+                    user_id=user.id,
+                    filename="범위.pdf",
+                    mime_type="application/pdf",
+                    status="ready",
+                    num_pages=1,
+                )
+                session.add(doc)
+                await session.commit()
+                await session.refresh(doc)
+                doc_id = str(doc.id)
+
+            conv_id = (
+                await client.post(
+                    "/conversations", json={"scope_document_id": doc_id}
+                )
+            ).json()["id"]
+
+            # Field absent -> fall back to the thread's own scope.
+            inherited = parse_sse(
+                (
+                    await client.post(
+                        f"/conversations/{conv_id}/query",
+                        json={"question": "이 문서만"},
+                    )
+                ).text
+            )
+
+            # Field present and null -> every document.
+            widened = parse_sse(
+                (
+                    await client.post(
+                        f"/conversations/{conv_id}/query",
+                        json={"question": "전체에서", "document_id": None},
+                    )
+                ).text
+            )
+
+        await _drop_user(email)
+        return doc_id, dict(inherited)["meta"], dict(widened)["meta"]
+
+    doc_id, inherited, widened = run_async(scenario)
+    assert inherited["scope"] == doc_id
+    assert widened["scope"] is None

@@ -158,9 +158,13 @@ async def _stream_turn(
     async with SessionLocal() as session:
         try:
             conversation = await _owned(session, conversation_id, user)
+            # Absent means "whatever this thread is scoped to"; present means
+            # the caller is choosing, and null is a real choice — every
+            # document. Reading None as "unset" would leave a thread that was
+            # created against one document with no way back to the corpus.
             scope = (
                 body.document_id
-                if body.document_id is not None
+                if "document_id" in body.model_fields_set
                 else conversation.scope_document_id
             )
 
