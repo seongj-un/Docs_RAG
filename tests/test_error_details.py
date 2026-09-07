@@ -29,14 +29,20 @@ EXPECTED = {
     "email already registered",
     "invalid email or password",
     "search unavailable",
+    "model quota exceeded",
+    "model unavailable",
     # Mapped by status — the status is unambiguous on its own.
     "authentication required",  # 401
     "not found",  # 404
     "Only PDF uploads are supported in M1",  # 415
 }
 
-# Helpers that take the detail as their first positional argument.
-DETAIL_HELPERS = {"too_many", "_too_many"}
+# Functions that build an HTTPException out of a detail handed to them, and
+# the position that detail arrives in. The literal scan cannot see through
+# these, so every one of them has to be listed — the guarantee this file makes
+# is only as wide as this mapping, and
+# ``test_every_detail_wrapper_is_registered`` is what keeps it honest.
+DETAIL_HELPERS = {"too_many": 0, "_too_many": 0, "_retryable": 2}
 
 
 def _literal_details() -> set[str]:
@@ -60,15 +66,75 @@ def _literal_details() -> set[str]:
                     if isinstance(keyword.value.value, str):
                         found.add(keyword.value.value)
 
-            name = getattr(node.func, "id", None) or getattr(
-                node.func, "attr", None
-            )
-            if name in DETAIL_HELPERS and node.args:
-                first = node.args[0]
-                if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                    found.add(first.value)
+            name = _called_name(node)
+            index = DETAIL_HELPERS.get(name)
+            if index is not None and index < len(node.args):
+                arg = node.args[index]
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    found.add(arg.value)
 
     return found
+
+
+def _called_name(node: ast.Call) -> str | None:
+    return getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+
+
+def _detail_wrappers() -> set[str]:
+    """Functions that pass a detail they were *handed* into an HTTPException.
+
+    Exactly the blind spots of the literal scan: from the outside such a call
+    looks like any other, so its detail string never gets seen. Each one has
+    to be registered in DETAIL_HELPERS with the position of its detail
+    argument.
+
+    An f-string detail is not one of these. It is unreadable to the scan for
+    a different reason — its text depends on configuration — and that case is
+    already handled by design: the frontend cannot key on it, so those
+    responses are mapped by status instead. Counting them here would demand a
+    registration that could never help.
+    """
+    wrappers: set[str] = set()
+
+    for path in sorted(APP.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for func in ast.walk(tree):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(func):
+                if not isinstance(node, ast.Call):
+                    continue
+                if _called_name(node) != "HTTPException":
+                    continue
+                if any(
+                    keyword.arg == "detail"
+                    and not isinstance(keyword.value, (ast.Constant, ast.JoinedStr))
+                    for keyword in node.keywords
+                ):
+                    wrappers.add(func.name)
+
+    return wrappers
+
+
+def test_every_detail_wrapper_is_registered():
+    """The scan must not be allowed to shrink in silence.
+
+    This is how the two Gemini details went missing: ``_retryable`` wraps
+    HTTPException and takes its detail third, so the string literals at its
+    call sites were invisible here — and the test still passed, reporting
+    full coverage of a set it could no longer see all of.
+
+    A test that quietly stops checking things is worse than no test, because
+    it is trusted. So an unregistered wrapper fails loudly instead.
+    """
+    unregistered = _detail_wrappers() - set(DETAIL_HELPERS)
+    assert not unregistered, (
+        f"detail 을 넘겨받아 HTTPException 을 만드는 함수가 등록되지 않았습니다: "
+        f"{sorted(unregistered)}\n"
+        "DETAIL_HELPERS 에 {함수명: detail 인자 위치} 로 추가해 주세요. "
+        "그러지 않으면 그 함수를 거치는 detail 은 이 파일의 검사에서 조용히 "
+        "빠지고, 프론트에 매핑이 없어도 아무도 모릅니다."
+    )
 
 
 def test_error_details_match_the_frontend_map():
