@@ -512,3 +512,47 @@ def test_scope_on_a_message_survives_deleting_the_document():
 
     doc_id, recorded = run_async(scenario)
     assert recorded == [doc_id]
+
+
+def test_failed_turn_leaves_no_unanswered_question(monkeypatch):
+    """A turn that produced no answer must leave no trace in the history.
+
+    The question is committed before generation so a reload mid-stream still
+    shows it. When the turn then fails there is nothing to pair it with, and
+    the user's retry adds another copy — in practice a real conversation
+    became four identical questions and no answers, which reads as a broken
+    thread rather than as failed attempts.
+    """
+    from fastapi import HTTPException
+
+    from app.services import pipeline as pl
+
+    async def failing_embed(self):
+        raise HTTPException(status_code=503, detail="search unavailable")
+
+    monkeypatch.setattr(pl.QueryRunner, "embed", failing_embed)
+
+    async def scenario():
+        transport = ASGITransport(app=app)
+        try:
+            async with AsyncClient(transport=transport, base_url="http://test") as c:
+                await _signup(c)
+                conversation = (await c.post("/conversations", json={})).json()
+                names = []
+                async with c.stream(
+                    "POST", f"/conversations/{conversation['id']}/query",
+                    json={"question": "이 문서 요약해줘"},
+                ) as response:
+                    async for line in response.aiter_lines():
+                        if line.startswith("event:"):
+                            names.append(line.split(":", 1)[1].strip())
+                history = (await c.get(f"/conversations/{conversation['id']}")).json()
+                return names, history
+        finally:
+            await engine.dispose()
+
+    names, history = asyncio.run(scenario())
+    assert names == ["error"], names
+    assert history["messages"] == [], (
+        "실패한 턴의 질문이 이력에 남았습니다 — 재시도할수록 답 없는 질문만 쌓입니다"
+    )

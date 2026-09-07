@@ -21,6 +21,7 @@ refusal is only known at the end, and a refusal must not carry citations.
 """
 
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator
 
@@ -43,6 +44,8 @@ from app.schemas import (
 )
 from app.services import generate, llm
 from app.services.pipeline import NOT_FOUND, QueryRunner
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
@@ -156,6 +159,10 @@ async def _stream_turn(
     starts streaming, so the generator would outlive it.
     """
     async with SessionLocal() as session:
+        # Bound before the try: a failure in the limit or scope checks lands in
+        # the handlers below, and an unbound name there would replace the real
+        # error with a NameError.
+        question_id: uuid.UUID | None = None
         try:
             conversation = await _owned(session, conversation_id, user)
             # Absent means "whatever this thread is scoped to"; present means
@@ -174,8 +181,13 @@ async def _stream_turn(
             await runner.enforce_limits(client_ip)
             await runner.resolve_scope()
 
+            # The id is chosen here rather than read back after the commit:
+            # a committed instance has expired attributes, and touching them
+            # would trigger a lazy load in an async context.
+            question_id = uuid.uuid4()
             session.add(
                 Message(
+                    id=question_id,
                     conversation_id=conversation.id,
                     role="user",
                     content=body.question,
@@ -256,9 +268,45 @@ async def _stream_turn(
         except HTTPException as exc:
             # The response is already 200 by the time streaming starts, so the
             # status has to be carried in the event instead.
+            #
+            # It is also logged. Carrying the failure only in the stream means
+            # the server keeps no record of it: the access log shows 200, and
+            # afterwards there is no way to answer "why did that fail?" — which
+            # is exactly the position this path left us in once already.
+            logger.warning(
+                "stream failed for conversation %s: %s %s",
+                conversation_id, exc.status_code, exc.detail,
+            )
+            await _discard_unanswered(session, question_id)
             yield _sse("error", {"status": exc.status_code, "detail": exc.detail})
-        except Exception as exc:  # noqa: BLE001 - the client needs *something*
-            yield _sse("error", {"status": 500, "detail": f"{type(exc).__name__}"})
+        except Exception:  # noqa: BLE001 - the client needs *something*
+            logger.exception("stream crashed for conversation %s", conversation_id)
+            await _discard_unanswered(session, question_id)
+            yield _sse("error", {"status": 500, "detail": "internal error"})
+
+
+async def _discard_unanswered(session: AsyncSession, question_id) -> None:
+    """A turn that produced no answer leaves no trace in the history.
+
+    The question is committed before generation so that reloading mid-stream
+    still shows it. But when the turn fails there is nothing to pair it with,
+    and the user's retry adds another copy — in practice a conversation became
+    four identical questions and no answers, which reads as a broken thread
+    rather than as failed attempts.
+
+    Cleanup must never replace the error that caused it, so anything going
+    wrong here is logged and swallowed.
+    """
+    if question_id is None:
+        return
+    try:
+        await session.rollback()  # the failure may have left a broken transaction
+        message = await session.get(Message, question_id)
+        if message is not None:
+            await session.delete(message)
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("could not discard the unanswered question %s", question_id)
 
 
 async def _persist_answer(

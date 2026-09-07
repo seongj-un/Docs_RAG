@@ -150,7 +150,9 @@ def main() -> None:
     _state["device"] = pick_device(args.device)
     print(f"device: {_state['device']}  ->  http://{args.host}:{args.port}")
     print("TEI_URL / RERANK_URL 을 위 주소로 설정하세요.")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    # info 로 둔다. warning 이면 액세스 로그가 사라져서, 요청이 도착이나
+    # 했는지조차 알 수 없다 — 실제로 그 상태에서 장애를 진단하지 못한 적이 있다.
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
 
 if __name__ == "__main__":

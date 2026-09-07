@@ -20,16 +20,21 @@ services:
       timeout: 3s
       retries: 20
 
-  # BGE-M3 + bge-reranker-v2-m3 on CPU. Reranking is what decides whether this
-  # is usable without a GPU, and it is roughly linear in candidate count.
-  # Measured in this container (best of 3, OMP_NUM_THREADS=4):
+  # BGE-M3 + bge-reranker-v2-m3 on CPU.
   #
-  #     CAND_K   5 ->  2.0s      20 ->  4.8s
-  #             10 ->  2.6s      50 -> 11.9s   (current default)
+  # ⚠️ Reranking cost depends on chunk *length*, not just candidate count, and
+  # real chunks are ~700 tokens. Measured in this container with chunks that
+  # size — not with the short clauses the eval corpora use:
   #
-  # The CAND_K sweep (eval/candk_sweep.py) found 50 -> 5 costs no measurable
-  # retrieval quality, so the knob is available. Pick it here, not from the
-  # host benchmark: a container on macOS runs in a VM and does not match it.
+  #     CAND_K 10 ->  29s        CAND_K 50 -> 184s
+  #
+  # 184s is past the client's 120s timeout, so a query over a real document
+  # fails with 503 "search unavailable". More threads do not help (10 threads
+  # measured slower than 4). The same 50 pairs take 10.6s on Apple MPS.
+  #
+  # So this service is for hosts with a GPU, or for corpora of small chunks.
+  # On Apple Silicon run the model server on the host and point the app at it
+  # with MODEL_URL — a container here cannot reach Metal.
   models:
     # Tagged so there is something to roll back *to*. Without an explicit
     # image name compose overwrites one implicit :latest on every build, and
@@ -77,8 +82,11 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/docs_rag
-      TEI_URL: http://models:8081
-      RERANK_URL: http://models:8081
+      # 기본은 compose 안의 CPU 모델 서비스. MODEL_URL 로 외부 서버를 가리킬 수
+      # 있다 — 애플 실리콘에서는 호스트의 MPS 서버가 유일하게 실용적인 선택이다:
+      #   MODEL_URL=http://host.docker.internal:8081 docker compose up -d app
+      TEI_URL: ${MODEL_URL:-http://models:8081}
+      RERANK_URL: ${MODEL_URL:-http://models:8081}
       STORAGE_DIR: /srv/storage
       # Empty leaves /admin/stats returning 404. Set ADMIN_TOKEN in .env to
       # turn the operational view on.
