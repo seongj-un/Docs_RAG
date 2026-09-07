@@ -1,0 +1,90 @@
+.screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 빈 상태: 업로드 상자가 화면 가운데에 온다. */
+.empty {
+  margin: 0 auto;
+  padding: 48px 24px;
+  max-width: var(--width-thread);
+  display: flex;
+  flex-direction: column;
+  gap: 21px;
+  align-items: center;
+  text-align: center;
+}
+
+.emptyLead {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.emptyHint {
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.sectionHead {
+  padding: 0 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--body);
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.item:hover {
+  background: var(--sunk);
+  color: var(--text);
+}
+
+.item[data-active="true"] {
+  background: var(--sunk);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--edge);
+}
+
+.itemLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty2 {
+  padding: 3px 8px;
+  font-size: 12.5px;
+  color: var(--faint);
+}

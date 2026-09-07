@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 
+import { ConversationsProvider } from "@/lib/conversations";
 import { DocumentsProvider } from "@/lib/documents";
 import { useSession } from "@/lib/session";
 
@@ -22,5 +23,9 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   if (loading || user === null) return null;
 
-  return <DocumentsProvider>{children}</DocumentsProvider>;
+  return (
+    <DocumentsProvider>
+      <ConversationsProvider>{children}</ConversationsProvider>
+    </DocumentsProvider>
+  );
 }

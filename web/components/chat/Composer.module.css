@@ -1,0 +1,74 @@
+.composer {
+  flex: none;
+  border-top: 1px solid var(--line-soft);
+  background: var(--bg);
+  padding: 13px 24px 19px;
+}
+
+.inner {
+  margin: 0 auto;
+  max-width: var(--width-thread);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.box {
+  display: flex;
+  align-items: flex-end;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--raise);
+  transition: border-color var(--transition);
+}
+
+.box:focus-within {
+  border-color: var(--edge);
+}
+
+.input {
+  flex: 1;
+  min-height: 24px;
+  max-height: 168px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.62;
+  resize: none;
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--faint);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.scope {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--raise);
+  color: var(--body);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color var(--transition);
+}
+
+.scope:hover {
+  border-color: var(--muted);
+}
+
+.hint {
+  margin-left: auto;
+  color: var(--faint);
+}

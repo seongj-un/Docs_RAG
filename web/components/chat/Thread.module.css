@@ -1,0 +1,62 @@
+.thread {
+  margin: 0 auto;
+  padding: 27px 24px 32px;
+  max-width: var(--width-thread);
+  display: flex;
+  flex-direction: column;
+  gap: 27px;
+}
+
+/* 질문 16px 600, -.01em */
+.question {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.answer {
+  font-size: 15px;
+  line-height: 1.62;
+  color: var(--body);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+/* 답변이 본문에서 가리키지 못한 근거. 모델이 [p.N]을 빠뜨려도 근거를 잃지 않게. */
+.orphans {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* 스트리밍 중임을 알리는 커서. 마지막 글자 뒤에 붙는다. */
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  background: var(--edge);
+  vertical-align: text-bottom;
+  animation: blink 1s steps(2, start) infinite;
+}
+
+@keyframes blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .caret {
+    animation: none;
+  }
+}
