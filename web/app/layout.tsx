@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { SessionProvider } from "@/lib/session";
 import { ThemeProvider, themeInitScript } from "@/lib/theme";
 import "./globals.css";
 
@@ -18,7 +19,9 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body>
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <SessionProvider>{children}</SessionProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
