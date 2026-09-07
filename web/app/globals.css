@@ -1,0 +1,106 @@
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css");
+@import "tailwindcss";
+@import "../styles/tokens.css";
+
+/* 토큰을 Tailwind 유틸리티로도 노출한다. 색은 CSS 변수가 원본이고,
+ * Tailwind는 레이아웃(flex·grid·spacing)에만 쓴다. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-raise: var(--raise);
+  --color-sunk: var(--sunk);
+  --color-edge: var(--edge);
+  --color-on-edge: var(--on-edge);
+  --color-text: var(--text);
+  --color-body: var(--body);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --font-sans: var(--font-sans);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--body);
+  font-family: var(--font-sans);
+  /* 본문 15px / line-height 1.62 */
+  font-size: 15px;
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 본문은 --body, 강조·제목은 --text. 밝기 차이가 곧 위계라서
+ * 제목에 크기만 주고 색을 두면 위계가 무너진다. */
+h1,
+h2,
+h3,
+h4,
+strong {
+  color: var(--text);
+  font-weight: 600;
+  margin: 0;
+}
+
+/* 화면 제목 22px 600 */
+h1 {
+  font-size: 22px;
+  letter-spacing: -0.02em;
+}
+
+/* 카드 제목 17px 600 */
+h2 {
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+
+/* 섹션 헤더 14px 600 */
+h3 {
+  font-size: 14px;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/* 포커스는 어디서나 같다: 1px --edge, offset 2px */
+:focus-visible {
+  outline: 1px solid var(--edge);
+  outline-offset: 2px;
+}
+
+/* 마우스 클릭으로 생기는 링은 지운다 — 키보드에만 남긴다. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+::selection {
+  background: var(--sunk);
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

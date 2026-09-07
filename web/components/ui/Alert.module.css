@@ -1,0 +1,27 @@
+/* 알림 블록 — 거부·실패·완료를 색이 아니라 문구로 구분한다.
+ * 왼쪽 2px --edge 선 + --sunk 면. */
+.alert {
+  border-left: 2px solid var(--edge);
+  border-radius: 0 9px 9px 0;
+  background: var(--sunk);
+  padding: 12px 15px;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 3px;
+}
+
+.body {
+  font-size: 13.5px;
+  color: var(--body);
+}
+
+/* 다음 행동 — 막다른 길로 끝내지 않는다. */
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 11px;
+}

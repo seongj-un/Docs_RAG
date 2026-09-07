@@ -1,0 +1,27 @@
+/* 각주 — 디자인 시스템의 핵심 요소.
+ * 1px --edge 테두리 상자 안에 숫자, 15px 정사각, radius 3px.
+ * 호버 시 면과 글자가 반전한다. */
+.footnote {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  margin: 0 1px 0 2px;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: super;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.footnote:hover {
+  background: var(--edge);
+  color: var(--on-edge);
+}

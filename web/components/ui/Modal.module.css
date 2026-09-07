@@ -1,0 +1,67 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  /* 색이 아니라 어둡기로만 뒤를 물린다. */
+  background: rgba(0, 0, 0, 0.42);
+}
+
+.panel {
+  width: 100%;
+  max-width: 620px;
+  max-height: min(78vh, 720px);
+  display: flex;
+  flex-direction: column;
+  background: var(--raise);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 17px 19px 13px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin: 0;
+}
+
+.close {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.close:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.content {
+  padding: 17px 19px 19px;
+  overflow-y: auto;
+}

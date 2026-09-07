@@ -1,0 +1,49 @@
+/* 상태 표시 — 색을 쓰지 않는다. 형태와 글자로만 구분한다(색맹 접근성). */
+.row {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mark {
+  width: 8px;
+  height: 8px;
+  flex: none;
+}
+
+/* 완료: 채운 원 */
+.ready {
+  border-radius: 50%;
+  background: var(--edge);
+}
+
+/* 처리중: 열린 링이 1.5초에 한 바퀴 */
+.processing {
+  border-radius: 50%;
+  border: 1.5px solid var(--edge);
+  border-top-color: transparent;
+  animation: spin 1.5s linear infinite;
+}
+
+/* 실패: 마름모(사각 45° 회전) */
+.failed {
+  background: var(--edge);
+  transform: rotate(45deg);
+}
+
+.label {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .processing {
+    animation: none;
+  }
+}

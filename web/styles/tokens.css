@@ -1,0 +1,81 @@
+/* 디자인 시스템 토큰 — 원본은 Notion `M5 · 프론트엔드/UX`.
+ *
+ * 핵심 원칙: 강조는 배경 대비 최대 대비의 얇은 선. 면은 회색. 색상(hue) 없음.
+ * 라이트/다크는 같은 원리를 뒤집은 것이라, 두 팔레트는 값만 다르고 역할이 같다.
+ * 그래서 컴포넌트는 --edge / --sunk 같은 역할 이름만 쓰고 테마를 알지 못한다.
+ *
+ * 상태·경고를 색으로 구분하지 않는다(색맹 접근성). 형태와 글자로 구분한다 —
+ * StatusMark, Alert 참조.
+ */
+
+:root {
+  /* 라이트가 기본값. 다크는 아래 두 블록에서 같은 이름을 덮어쓴다. */
+  --bg: #ffffff;
+  --panel: #f5f5f6;
+  --raise: #ffffff;
+  --sunk: #ededef;
+  --edge: #08080a;
+  --on-edge: #ffffff;
+  --text: #08080a;
+  --body: #35353c;
+  --muted: #70707a;
+  --faint: #a0a0a9;
+  --line: #e3e3e7;
+  --line-soft: #eeeef1;
+
+  --shadow: 0 1px 2px rgba(10, 10, 20, 0.05), 0 10px 30px rgba(10, 10, 20, 0.07);
+
+  /* 아래는 테마와 무관하다. */
+  --radius-card: 12px;
+  --radius-control: 7px;
+  --radius-small: 5px;
+
+  --sidebar-width: 264px;
+  --width-thread: 700px;
+  --width-screen: 840px;
+  --width-login: 400px;
+
+  --transition: 0.18s ease;
+
+  --font-sans: "Pretendard Variable", Pretendard, -apple-system,
+    BlinkMacSystemFont, system-ui, "Apple SD Gothic Neo", "Malgun Gothic",
+    sans-serif;
+}
+
+/* 시스템 설정을 따르되, 수동으로 라이트를 고른 경우는 제외한다. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161619;
+    --panel: #1c1c1f;
+    --raise: #212125;
+    --sunk: #2a2a2f;
+    --edge: #ffffff;
+    --on-edge: #161619;
+    --text: #f4f4f5;
+    --body: #c6c6cb;
+    --muted: #8a8a91;
+    --faint: #5c5c63;
+    --line: #33333a;
+    --line-soft: #28282d;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 14px 36px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* 수동으로 다크를 고른 경우. 시스템이 라이트여도 이긴다. */
+:root[data-theme="dark"] {
+  --bg: #161619;
+  --panel: #1c1c1f;
+  --raise: #212125;
+  --sunk: #2a2a2f;
+  --edge: #ffffff;
+  --on-edge: #161619;
+  --text: #f4f4f5;
+  --body: #c6c6cb;
+  --muted: #8a8a91;
+  --faint: #5c5c63;
+  --line: #33333a;
+  --line-soft: #28282d;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 14px 36px rgba(0, 0, 0, 0.5);
+}
