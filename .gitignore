@@ -8,3 +8,6 @@ storage/
 .pytest_cache/
 .DS_Store
 .idea/
+
+# DB 덤프 (scripts/db_backup.sh)
+backups/

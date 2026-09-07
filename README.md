@@ -261,6 +261,38 @@ python -m eval.golden_run        # 골든셋 3문서·36문항 → 기록 덤프
 python -m eval.judge_run         # 위 기록으로 4개 품질 지표 산출
 ```
 
+## 운영
+
+### 백업과 복구 리허설
+
+```bash
+scripts/db_backup.sh          # backups/docs_rag-<utc>.dump (최근 7개 유지)
+scripts/db_restore_check.sh   # 최신 덤프를 임시 DB에 복구해 대조
+```
+
+`db_restore_check.sh`는 **리허설이지 복구가 아니다.** 라이브 DB를 건드리지
+않고 임시 DB에 복구한 뒤 행 수를 원본과 대조하고, 임베딩을 하나 읽어
+1024차원인지까지 본 다음 임시 DB를 지운다. 실패하면 1로 끝난다.
+
+한 번도 복구해보지 않은 백업은 백업이 아니다. 그 사실은 보통 필요한 날
+알게 된다.
+
+`pg_dump`·`pg_restore`는 **컨테이너 안에서** 돈다. 클라이언트가 서버보다
+낮으면 덤프가 실패하는데, 컨테이너에는 항상 맞는 버전이 들어 있다.
+덤프 파일은 파이프가 아니라 파일로 넘긴다 — 커스텀 포맷은 seek으로 읽어서,
+멀쩡한 덤프인데도 `pg_restore --list`가 "did not find magic string"으로
+실패한다.
+
+실제 복구는 리허설과 같은 절차에 대상만 다르다:
+```bash
+docker compose stop app
+docker compose exec -T db dropdb -U postgres --force docs_rag
+docker compose exec -T db createdb -U postgres docs_rag
+docker compose cp backups/<파일>.dump db:/tmp/r.dump
+docker compose exec -T db pg_restore -U postgres -d docs_rag --no-owner /tmp/r.dump
+docker compose start app
+```
+
 ## 마일스톤
 
 | | 내용 | 상태 |
