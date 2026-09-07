@@ -63,6 +63,15 @@ Turbopack dev가 포트를 잡지 못하는 환경에서는 `npm run dev:webpack
 `document_id`는 **필드의 유무**로 읽는다. 없으면 대화에 저장된 범위,
 있으면 호출자가 고른 것이고 `null`도 진짜 선택(전체 문서)이다.
 
+### 모델 제공자 쪽 실패는 500이 아니다
+
+Gemini의 무료 티어 한도(429)와 과부하(503)는 이 서버의 결함이 아니라
+남의 형편이다. 그대로 두면 `Internal Server Error` 한 줄로 나가서 원인도
+다음 행동도 알려주지 못하므로, 각각 429 `model quota exceeded` ·
+503 `model unavailable`로 옮겨 담는다. 제공자가 재시도 시각을 알려줄 때만
+`Retry-After`를 붙인다(일일 한도에는 안 붙는다 — 답이 "내일"이라서).
+그 밖의 실패는 그대로 터뜨린다. 임시 장애로 위장하면 진짜 버그가 숨는다.
+
 ## 테스트
 ```bash
 pip install pytest

@@ -36,6 +36,14 @@ const BY_DETAIL: Record<string, ErrorCopy> = {
     title: "문서를 너무 빠르게 올리고 있습니다",
     hint: "잠시 뒤에 다시 올려 주세요.",
   },
+  "model quota exceeded": {
+    title: "지금은 답변을 만들 수 없습니다",
+    hint: "사용량이 한도에 닿았습니다. 잠시 뒤에, 그래도 안 되면 내일 다시 시도해 주세요.",
+  },
+  "model unavailable": {
+    title: "지금은 답변을 만들 수 없습니다",
+    hint: "AI 쪽이 잠시 붐빕니다. 잠시 뒤에 다시 물어봐 주세요.",
+  },
   "monthly upload page quota exceeded": {
     title: "이번 달 올릴 수 있는 쪽수를 다 썼습니다",
     hint: "다음 달 1일에 다시 채워집니다.",
@@ -77,6 +85,10 @@ const BY_STATUS: Record<number, ErrorCopy> = {
   },
   500: {
     title: "서버에서 문제가 생겼습니다",
+    hint: "잠시 뒤에 다시 시도해 주세요.",
+  },
+  503: {
+    title: "잠시 이용할 수 없습니다",
     hint: "잠시 뒤에 다시 시도해 주세요.",
   },
 };
