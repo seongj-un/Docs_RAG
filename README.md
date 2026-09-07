@@ -21,6 +21,19 @@ docker compose up -d     # db · 모델 · 앱 · 프론트 · 프록시
 open http://localhost:8088
 ```
 
+**애플 실리콘에서는 `scripts/stack.sh up` 을 쓴다.** 모델 서버까지 함께 띄운다:
+
+```bash
+scripts/stack.sh up      # 호스트 MPS 모델 서버 + 컨테이너 스택
+scripts/stack.sh status
+scripts/stack.sh down    # 둘 다 정지 (볼륨은 남긴다)
+```
+
+컨테이너 CPU 로 리랭킹하면 **실제 크기 청크 50개에 184초**가 걸려 클라이언트
+타임아웃(120초)을 넘겨 503 `search unavailable` 이 된다. 같은 작업이 호스트
+MPS 에서는 10.6초다(스레드를 늘려도 CPU 는 나아지지 않는다). 그래서 맥에서는
+모델 서버만 컨테이너 밖에 두고, `.env` 의 `MODEL_URL` 이 그쪽을 가리킨다.
+
 **프론트와 API 가 한 오리진이다.** 프록시가 `/` 는 프론트로, `/api/*` 는
 백엔드로 보낸다(접두사는 떼고 넘기므로 백엔드는 자기가 하위 경로에 붙어
 있다는 사실을 모른다). 그래서
