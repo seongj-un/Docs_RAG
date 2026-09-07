@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 같은 브랜치에 연달아 밀면 앞의 실행은 취소한다 — 최신 커밋의 결과만 의미가 있다.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+
+    services:
+      # 통합 테스트는 Postgres가 없으면 스스로 스킵한다. 여기서 띄우지
+      # 않으면 CI는 초록으로 보이면서 격리·대화·SSE를 아무것도 검증하지
+      # 않는다 — 조용히 통과하는 CI가 없는 CI보다 나쁘다.
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: docs_rag
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: 스키마 적용
+        # 앱은 기동 시 마이그레이션을 돌리지만 테스트는 세션을 직접 열기
+        # 때문에, 여기서 먼저 올려두지 않으면 테이블이 없다.
+        run: alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/docs_rag
+
+      - name: 테스트
+        # 통합 테스트는 Postgres가 없으면 스스로 스킵한다. 그대로 두면 DB가
+        # 빠졌을 때 CI가 초록으로 보이면서 격리·대화·SSE를 아무것도 검증하지
+        # 않는다. 그래서 실행 결과에서 스킵 수를 세어 0이 아니면 실패시킨다.
+        run: |
+          set -o pipefail
+          pytest -q | tee result.txt
+          skipped=$(grep -oE '[0-9]+ skipped' result.txt | grep -oE '[0-9]+' || true)
+          if [ -n "${skipped:-}" ] && [ "${skipped}" -gt 0 ]; then
+            echo "::error::통합 테스트 ${skipped}개가 스킵됐습니다 — Postgres에 붙지 못했다는 뜻입니다."
+            exit 1
+          fi
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/docs_rag
+          # 외부 모델 서버는 CI에 없다. 테스트가 전부 스텁으로 갈음하지만,
+          # 실수로 진짜 호출이 생기면 빈 키로 즉시 터지게 둔다.
+          GEMINI_API_KEY: ""
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: 의존성 설치
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: 테스트
+        run: npm test
+
+      - name: 빌드
+        run: npm run build
