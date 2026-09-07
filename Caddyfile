@@ -1,28 +1,37 @@
-# Reverse proxy and TLS terminator.
+# 리버스 프록시 · TLS 종단 · 프론트와 API 를 한 오리진으로 합치는 곳.
 #
-# SITE_ADDRESS decides the mode. Unset it and Caddy serves plain HTTP on :80,
-# which is what you want locally. Set it to a domain (SITE_ADDRESS=qa.example.com)
-# and Caddy obtains and renews a certificate on its own — that is the whole of
-# the "public domain + HTTPS" completion criterion.
+# 한 오리진으로 합치는 것이 핵심이다. 브라우저가 보기에 출처가 하나라
+# CORS 가 아예 없고, 세션 쿠키도 같은 출처 안에서만 오간다. 그리고
+# NEXT_PUBLIC_API_BASE 가 상대 경로(/api)로 끝나므로 프론트 이미지에
+# 호스트 주소가 박히지 않는다 — localhost 든 도메인이든 같은 이미지가 돈다.
+#
+# SITE_ADDRESS 가 모드를 가른다. 비우면 :80 평문(로컬), 도메인을 넣으면
+# Caddy 가 인증서를 자동 발급한다. 기본값은 docker-compose.yml 에만 둔다 —
+# **비어 있게 설정된** 환경변수는 Caddyfile 기본값을 이기고 주소 없는
+# 블록을 만들어, Caddy 가 이를 떠도는 global 블록으로 읽고 기동에 실패한다.
 {
 	admin off
 }
 
-# The default lives in docker-compose.yml, not here: an env var that is
-# *set but empty* wins over a Caddyfile default and leaves this block
-# without an address, which Caddy reads as a stray global block.
 {$SITE_ADDRESS} {
 	encode zstd gzip
 
-	# Uploads are capped at MAX_UPLOAD_MB (50) in the app; the proxy must not
-	# reject them first with a 413 of its own.
-	request_body {
-		max_size 64MB
+	# handle_path 는 매칭된 접두사를 떼고 넘긴다: /api/auth/me -> /auth/me.
+	# 그래서 백엔드는 자기가 하위 경로에 붙어 있다는 사실을 몰라도 된다.
+	handle_path /api/* {
+		# 업로드 상한은 앱이 MAX_UPLOAD_MB(50)로 정한다. 프록시가 먼저
+		# 413 을 내면 앱의 안내 문구 대신 프록시의 오류가 나간다.
+		request_body {
+			max_size 64MB
+		}
+		# SSE: 답변이 토큰 단위로 흐르므로, 프록시가 버퍼를 채우려고
+		# 응답을 물고 있으면 안 된다.
+		reverse_proxy app:8000 {
+			flush_interval -1
+		}
 	}
 
-	# SSE: an answer streams token by token, so the proxy must not sit on the
-	# response waiting to fill a buffer.
-	reverse_proxy app:8000 {
-		flush_interval -1
+	handle {
+		reverse_proxy web:3000
 	}
 }

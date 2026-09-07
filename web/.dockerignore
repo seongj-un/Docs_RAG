@@ -1,0 +1,13 @@
+node_modules/
+.next/
+out/
+tsconfig.tsbuildinfo
+
+# 로컬 개발 설정. 빌드 컨텍스트에 들어가면 Next 가 이 파일을 읽어
+# NEXT_PUBLIC_API_BASE 를 개발용 값(호스트 주소)으로 굳혀버린다 —
+# 컨테이너 이미지는 빌드 인자로 받은 /api 를 써야 한다.
+.env.local
+.env*.local
+
+.git/
+.DS_Store

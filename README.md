@@ -17,9 +17,18 @@ PDF를 올리고 자연어로 물으면 **근거 페이지를 인용해** 답한
 
 ```bash
 cp .env.example .env     # GEMINI_API_KEY 를 채운다
-docker compose up -d     # db · 모델 · 앱 · 프록시
-curl http://localhost:8088/health
+docker compose up -d     # db · 모델 · 앱 · 프론트 · 프록시
+open http://localhost:8088
 ```
+
+**프론트와 API 가 한 오리진이다.** 프록시가 `/` 는 프론트로, `/api/*` 는
+백엔드로 보낸다(접두사는 떼고 넘기므로 백엔드는 자기가 하위 경로에 붙어
+있다는 사실을 모른다). 그래서
+
+- **CORS 가 아예 없다** — 브라우저가 보기에 출처가 하나다.
+- **프론트 이미지에 호스트 주소가 박히지 않는다.** `NEXT_PUBLIC_*` 은 런타임이
+  아니라 빌드 시점에 번들에 굳는데, 값이 상대 경로(`/api`)라 localhost 든
+  도메인이든 같은 이미지가 그대로 돈다.
 
 첫 기동은 모델 가중치를 받는다(`hf-cache` 볼륨에 약 6.9GB로 남아 이후엔 즉시).
 그동안에도 앱은 이미 떠 있고, 질의는 503 `search unavailable`로 답한다 —
@@ -68,7 +77,10 @@ npm install
 cp .env.example .env.local   # NEXT_PUBLIC_API_BASE
 npm run dev                  # http://localhost:3000
 ```
-백엔드의 `cors_origins`에 이 오리진이 있어야 세션 쿠키가 오간다.
+`NEXT_PUBLIC_API_BASE` 는 무엇을 보느냐에 따라 다르다 — 컨테이너 스택이면
+`http://localhost:8088/api`, 호스트 uvicorn 이면 `http://localhost:8000`.
+개발 서버는 배포본과 다른 오리진(:3000)이므로 **여기서는 CORS 가 필요하다**:
+백엔드의 `cors_origins` 에 이 오리진이 있어야 세션 쿠키가 오간다.
 Turbopack dev가 포트를 잡지 못하는 환경에서는 `npm run dev:webpack`.
 
 ## 구조
@@ -96,7 +108,7 @@ app/
     ├── usage.py      # DB 집계 쿼터
     └── tracing.py    # 단계별 지연 기록
 alembic/versions/     # 마이그레이션 7개
-web/                  # Next.js 16 App Router · TypeScript · Tailwind v4
+web/                  # Next.js 16 App Router · TypeScript · Tailwind v4 (+ Dockerfile)
 eval/                 # 검색 품질 평가 하네스 + 라벨링 코퍼스
 scripts/              # 로컬 모델 서버 · e2e 스모크 · 벤치마크
 tests/                # pytest (Postgres 없으면 통합 테스트는 스킵)
@@ -121,6 +133,8 @@ tests/                # pytest (Postgres 없으면 통합 테스트는 스킵)
 | `GET /traces` · `GET /traces/{id}` | 질의 진단 기록 |
 | `GET /admin/stats` | 운영 통계 (헤더 `X-Admin-Token`) |
 | `GET /health` | 공개 |
+
+컨테이너 스택에서는 전부 `/api` 아래에 붙는다 — `/api/health`, `/api/query` …
 
 ## 알아둘 동작
 
@@ -214,7 +228,7 @@ npm --prefix web run build   # 타입 검사 포함 — vitest는 타입을 보�
 python -m scripts.e2e_smoke  # 실제 HTTP로 전 구간 (서버·DB·모델·LLM 필요)
 ```
 통합 테스트는 Postgres에 닿지 못하면 스킵된다. 스모크는 `--base`로 대상을
-바꿀 수 있다(예: 컨테이너 스택 `--base http://localhost:8088`).
+바꿀 수 있다(예: 컨테이너 스택 `--base http://localhost:8088/api`).
 
 ## 검색 품질 평가
 

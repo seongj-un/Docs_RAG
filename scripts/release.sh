@@ -9,7 +9,7 @@
 #   scripts/release.sh v0.3.0       # explicit tag
 #
 # Then deploy, and roll back if it misbehaves:
-#   APP_TAG=<tag> MODELS_TAG=<tag> docker compose up -d
+#   APP_TAG=<tag> MODELS_TAG=<tag> WEB_TAG=<tag> docker compose up -d
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -24,15 +24,16 @@ if [ -z "${ALLOW_DIRTY:-}" ] && ! git diff --quiet HEAD 2>/dev/null; then
 fi
 
 echo "building $tag"
-APP_TAG="$tag" MODELS_TAG="$tag" docker compose build app models
+APP_TAG="$tag" MODELS_TAG="$tag" WEB_TAG="$tag" docker compose build app models web
 
 # Also move :dev so a plain `docker compose up` runs what was just built.
 docker tag "docs-rag-app:$tag" docs-rag-app:dev
 docker tag "docs-rag-models:$tag" docs-rag-models:dev
+docker tag "docs-rag-web:$tag" docs-rag-web:dev
 
 echo
-echo "배포:   APP_TAG=$tag MODELS_TAG=$tag docker compose up -d"
-echo "롤백:   APP_TAG=<이전태그> MODELS_TAG=<이전태그> docker compose up -d"
+echo "배포:   APP_TAG=$tag MODELS_TAG=$tag WEB_TAG=$tag docker compose up -d"
+echo "롤백:   APP_TAG=<이전태그> MODELS_TAG=<이전태그> WEB_TAG=<이전태그> docker compose up -d"
 echo
 echo "보관 중인 태그:"
 docker images docs-rag-app --format "  docs-rag-app:{{.Tag}}  ({{.CreatedSince}})"
