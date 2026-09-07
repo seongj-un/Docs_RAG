@@ -78,6 +78,16 @@ class Settings(BaseSettings):
     # advertise that an admin surface exists at all.
     admin_token: str = ""
 
+    # Token spend accounting for scripts/cost_report.py. Rates default to 0 —
+    # this project does not guess what the provider charges, because a made-up
+    # number in a cost alert is worse than no alert. Fill them in from the
+    # provider's pricing page, per one million tokens.
+    cost_per_mtok_in: float = 0.0
+    cost_per_mtok_out: float = 0.0
+    cost_currency: str = "USD"
+    # Spend over the report window that should trip an alert. 0 disables.
+    cost_ceiling: float = 0.0
+
     # --- M3: auth & tenant isolation ---
     session_cookie_name: str = "session_id"
     session_ttl_days: int = 14
