@@ -35,7 +35,9 @@ def test_below_min_score_refuses_without_calling_llm():
 
 
 def test_grounded_chunks_invoke_llm(monkeypatch):
-    async def fake_generate(system_prompt: str, user_prompt: str) -> Generation:
+    async def fake_generate(
+        system_prompt: str, user_prompt: str, *, model=None
+    ) -> Generation:
         assert "컨텍스트" in user_prompt
         return Generation(text="답변입니다 [p.1]", tokens_in=11, tokens_out=7)
 
@@ -50,7 +52,9 @@ def test_grounded_chunks_invoke_llm(monkeypatch):
 
 
 def test_llm_refusal_text_drops_citations(monkeypatch):
-    async def fake_generate(system_prompt: str, user_prompt: str) -> Generation:
+    async def fake_generate(
+        system_prompt: str, user_prompt: str, *, model=None
+    ) -> Generation:
         return Generation(text=generate.REFUSAL_TEXT)
 
     monkeypatch.setattr(generate.llm, "generate", fake_generate)

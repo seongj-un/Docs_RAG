@@ -106,7 +106,7 @@ def _stub_pipeline(monkeypatch, candidates, ranked):
     async def fake_rerank(question, texts):
         return ranked
 
-    async def fake_answer(question, chunks):
+    async def fake_answer(question, chunks, **kwargs):
         return Answer(
             answer="테스트 답변 [p.3].",
             refused=False,

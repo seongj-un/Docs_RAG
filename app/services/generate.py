@@ -72,15 +72,28 @@ def _citations(chunks: list[RetrievedChunk]) -> list[Citation]:
     ]
 
 
-async def answer_question(question: str, chunks: list[RetrievedChunk]) -> Answer:
-    grounded = [c for c in chunks if c.score >= settings.min_score]
+async def answer_question(
+    question: str,
+    chunks: list[RetrievedChunk],
+    *,
+    model: str | None = None,
+    min_score: float | None = None,
+) -> Answer:
+    """Answer from the given chunks, or refuse when none are grounded.
+
+    ``min_score`` is the grounding floor. It must match the score space of
+    ``chunks``: cosine similarity on the dense path, cross-encoder sigmoid
+    on the reranked path. Defaults to the dense-path floor.
+    """
+    floor = settings.min_score if min_score is None else min_score
+    grounded = [c for c in chunks if c.score >= floor]
 
     if not grounded:
         return Answer(answer=REFUSAL_TEXT, refused=True, citations=[])
 
     context = _build_context(grounded)
     user_prompt = f"질문: {question}\n\n컨텍스트:\n{context}"
-    result = await llm.generate(SYSTEM_PROMPT, user_prompt)
+    result = await llm.generate(SYSTEM_PROMPT, user_prompt, model=model)
     text = result.text
 
     refused = (not text) or (REFUSAL_TEXT in text)

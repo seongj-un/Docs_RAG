@@ -31,11 +31,29 @@ class Settings(BaseSettings):
     rerank_url: str = "http://localhost:8081"  # bge-reranker-v2-m3 (TEI)
     rrf_k: int = 60          # RRF constant
     cand_k: int = 50         # candidates per retriever (dense top-N, sparse top-N)
-    rerank_top: int = 8      # chunks kept after reranking (context size)
+    # Context size after reranking. Was 8; the M4 golden-set evaluation measured
+    # context_precision 0.246 at that size (7 of 8 chunks typically irrelevant)
+    # while R@3 was 1.000 — the needed page was always within the top 3, so the
+    # extra five were pure noise.
+    rerank_top: int = 3
+    # Grounding floor for the reranked path. Separate from MIN_SCORE because the
+    # scores are not the same quantity: MIN_SCORE gates cosine similarity, this
+    # gates the cross-encoder's sigmoid. Reusing 0.2 for both (the M2 decision)
+    # deterministically refused 21% of answerable questions — the reranker scores
+    # correct-but-reworded matches low (e.g. "강아지" vs "반려동물" -> 0.038),
+    # while genuinely unanswerable questions score ~0.000-0.002. 0.005 sits in
+    # that gap. It is a cheap pre-filter, not the refusal decision: borderline
+    # cases still reach the LLM, which is instructed to refuse ungrounded asks.
+    rerank_min_score: float = 0.005
 
     # Generation LLM (Gemini)
     llm_provider: str = "gemini"
     llm_model: str = "gemini-3.6-flash"
+    # Evaluation runs on a separate, lighter model. The flagship Flash tier
+    # allows only 20 requests/day free, which a 36-question sweep exhausts
+    # before it finishes; Flash-Lite has room for repeated before/after runs.
+    # Production generation is unaffected by this setting.
+    eval_llm_model: str = "gemini-3.1-flash-lite"
     gemini_api_key: str = ""
 
     # Chunking (token targets, approximated by words in M1)

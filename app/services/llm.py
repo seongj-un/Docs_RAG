@@ -29,11 +29,17 @@ def _client() -> genai.Client:
     return genai.Client(api_key=settings.gemini_api_key)
 
 
-async def generate(system_prompt: str, user_prompt: str) -> Generation:
-    """Generate a completion, with token usage when the provider reports it."""
+async def generate(
+    system_prompt: str, user_prompt: str, *, model: str | None = None
+) -> Generation:
+    """Generate a completion, with token usage when the provider reports it.
+
+    ``model`` overrides the configured production model — used by evaluation,
+    which runs on a lighter model with a larger free-tier budget.
+    """
     client = _client()
     resp = await client.aio.models.generate_content(
-        model=settings.llm_model,
+        model=model or settings.llm_model,
         contents=user_prompt,
         config=genai.types.GenerateContentConfig(
             system_instruction=system_prompt,

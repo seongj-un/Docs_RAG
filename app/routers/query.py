@@ -175,7 +175,13 @@ async def query(
     )
 
     async with watch.time("generate"):
-        result = await generate.answer_question(body.question, found.chunks)
+        # The hybrid path's scores are reranker sigmoids, not cosine, so it
+        # carries its own floor.
+        result = await generate.answer_question(
+            body.question,
+            found.chunks,
+            min_score=settings.rerank_min_score if use_hybrid else None,
+        )
 
     citations = [
         Citation(
