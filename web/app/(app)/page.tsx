@@ -101,7 +101,22 @@ function Chat() {
       setMessages(detail.messages ?? []);
       setScope(detail.scope_document_id ?? null);
     } catch (cause) {
-      setTurnError(describeError(cause));
+      /* 404(없는 대화)와 422(id가 UUID 형식이 아님)는 사용자에게 같은
+       * 상황이다 — 이 주소로는 열 수 없다. 공용 문구는 각각 "목록을 새로
+       * 불러와 주세요"와 "잠시 뒤에 다시 시도해 주세요"라고 하는데, 여기선
+       * 목록이 멀쩡하고 다시 시도해도 결과가 같다. 안내한 해결 방법과
+       * 실제로 주는 행동(새 대화 시작하기)이 어긋나지 않게 따로 말한다. */
+      if (
+        cause instanceof ApiError &&
+        (cause.status === 404 || cause.status === 422)
+      ) {
+        setTurnError({
+          title: "이 대화를 찾을 수 없습니다",
+          hint: "이미 지워졌거나, 주소가 잘못됐을 수 있습니다.",
+        });
+      } else {
+        setTurnError(describeError(cause));
+      }
     }
   }, []);
 
@@ -210,7 +225,9 @@ function Chat() {
     <AppShell crumb="대화">
       <div className={styles.screen}>
         <div className={styles.scroll} ref={scrollRef}>
-          {messages.length === 0 && streaming === null && (
+          {/* 에러가 있으면 빈 상태를 내지 않는다 — "무엇을 찾아드릴까요"와
+              "찾을 수 없습니다"가 같이 떠 있으면 무슨 일이 났는지 알 수 없다. */}
+          {messages.length === 0 && streaming === null && turnError === null && (
             <div className={styles.empty}>
               <div className={styles.emptyLead}>
                 <h1>무엇을 찾아드릴까요</h1>
@@ -224,7 +241,10 @@ function Chat() {
             </div>
           )}
 
-          {messages.length > 0 && (
+          {/* 에러도 여기 들어간다. 예전엔 messages.length > 0 안에만 있어서,
+              대화를 못 불러온 경우(메시지가 비어 있는 그 경우)에 정작 아무
+              말도 하지 않았다. */}
+          {(messages.length > 0 || streaming !== null || turnError !== null) && (
             <div className={thread.thread}>
               {messages.map((message) => (
                 <Turn
@@ -250,11 +270,18 @@ function Chat() {
                   title={turnError.title}
                   urgent
                   actions={
+                    /* 질문하다 실패했으면 그 질문을 다시 보내면 된다.
+                       대화를 여는 데 실패한 것이라면 다시 시도해도 같은
+                       결과이므로, 나갈 길을 준다. */
                     lastQuestion ? (
                       <Button onClick={() => void ask(lastQuestion)}>
                         다시 시도
                       </Button>
-                    ) : undefined
+                    ) : (
+                      <Button onClick={() => router.push("/")}>
+                        새 대화 시작하기
+                      </Button>
+                    )
                   }
                 >
                   {turnError.hint}

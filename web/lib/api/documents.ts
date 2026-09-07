@@ -5,10 +5,6 @@ export function listDocuments(): Promise<Document[]> {
   return request<Document[]>("/documents");
 }
 
-export function getDocument(id: string): Promise<Document> {
-  return request<Document>(`/documents/${id}`);
-}
-
 export function deleteDocument(id: string): Promise<void> {
   return request<void>(`/documents/${id}`, { method: "DELETE" });
 }
