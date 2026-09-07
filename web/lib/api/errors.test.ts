@@ -1,22 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { ApiError, describeError } from "./errors";
+import { ApiError, BY_DETAIL, BY_STATUS, describeError } from "./errors";
 
-/* 백엔드가 실제로 보내는 detail 문자열들. 여기 적힌 것과 백엔드가
- * 어긋나면 문구가 조용히 일반 폴백으로 떨어지고, 그 폴백은 틀린 조언을
- * 준다("잠시 뒤에 다시 시도해 주세요"). 백엔드 쪽 대조는
- * tests/test_error_details.py가 맡는다. */
-const BACKEND_DETAILS = [
-  "query rate limit exceeded",
-  "daily query quota exceeded",
-  "upload rate limit exceeded",
-  "monthly upload page quota exceeded",
-  "email already registered",
-  "invalid email or password",
-  "search unavailable",
-  "model quota exceeded",
-  "model unavailable",
-];
+/* 목록을 베껴두지 않고 실제 표를 순회한다. 사본은 조용히 좁아지고 검사는
+ * 줄어든 채로 통과한다 — 실제로 두 건이 빠져 있었다.
+ *
+ * "이 표가 백엔드와 일치하는가"는 여기서 알 수 없다(백엔드 소스를 읽을 수
+ * 없으므로). 그건 tests/test_error_details.py 가 양방향으로 대조한다.
+ * 이 파일이 보는 것은 describeError 의 동작과 문구의 품질이다. */
+const BACKEND_DETAILS = Object.keys(BY_DETAIL);
 
 describe("describeError", () => {
   it("429 하나를 detail로 갈라 서로 다른 행동을 안내한다", () => {
@@ -81,11 +73,13 @@ describe("describeError", () => {
     expect(describeError(undefined).title).toBe("문제가 생겼습니다");
   });
 
-  it("백엔드가 보내는 detail은 전부 전용 문구를 가진다", () => {
-    /* 하나라도 일반 폴백으로 떨어지면 카피 규칙(원인 + 해결 방법)이
-     * 깨진다 — 사용자는 무엇을 해야 할지 모르게 된다. */
+  it("표에 있는 detail은 하나도 폴백으로 떨어지지 않는다", () => {
+    /* 표에 적어두고도 조회에서 놓치는 일이 없게 한다. 하나라도 폴백으로
+     * 떨어지면 카피 규칙(원인 + 해결 방법)이 깨지고, 사용자는 무엇을 해야
+     * 할지 모르게 된다. */
     const fallback = describeError(new ApiError(999, "unmapped"));
 
+    expect(BACKEND_DETAILS.length).toBeGreaterThan(0);
     for (const detail of BACKEND_DETAILS) {
       const copy = describeError(new ApiError(400, detail));
       expect(copy, detail).not.toEqual(fallback);
@@ -96,14 +90,8 @@ describe("describeError", () => {
     /* 카피 규칙: "에러 발생" 대신 (원인) + (해결 방법). */
     const cases = [
       ...BACKEND_DETAILS.map((d) => new ApiError(400, d)),
-      new ApiError(0, "x"),
-      new ApiError(401, "x"),
-      new ApiError(404, "x"),
-      new ApiError(413, "x"),
-      new ApiError(415, "x"),
-      new ApiError(429, "x"),
-      new ApiError(500, "x"),
-      new ApiError(999, "x"),
+      ...Object.keys(BY_STATUS).map((s) => new ApiError(Number(s), "x")),
+      new ApiError(999, "x"), // 어디에도 없는 것 = 폴백
     ];
 
     for (const error of cases) {

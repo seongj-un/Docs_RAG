@@ -23,7 +23,10 @@ export type ErrorCopy = {
 /* 백엔드 detail은 영어 식별자다 ("daily query quota exceeded"). 사용자에게는
  * 그대로 보여주지 않는다 — 카피 규칙상 시스템 용어를 쓰지 않고, 429처럼 한
  * 상태 코드가 서로 다른 두 가지를 뜻할 때는 detail로만 구분되기 때문이다. */
-const BY_DETAIL: Record<string, ErrorCopy> = {
+/* 테스트가 이 표 자체를 순회한다. 목록을 따로 베껴 두면 그 사본이
+ * 조용히 좁아지고, 검사는 줄어든 채로 계속 통과한다 — 실제로 그렇게
+ * 두 건이 빠져 있었다. 대조 상대는 tests/test_error_details.py 다. */
+export const BY_DETAIL: Record<string, ErrorCopy> = {
   "query rate limit exceeded": {
     title: "질문이 너무 빠릅니다",
     hint: "잠시 뒤에 다시 물어봐 주세요.",
@@ -65,7 +68,7 @@ const BY_DETAIL: Record<string, ErrorCopy> = {
   },
 };
 
-const BY_STATUS: Record<number, ErrorCopy> = {
+export const BY_STATUS: Record<number, ErrorCopy> = {
   0: {
     title: "서버에 연결하지 못했습니다",
     hint: "백엔드가 실행 중인지 확인한 뒤 다시 시도해 주세요.",
