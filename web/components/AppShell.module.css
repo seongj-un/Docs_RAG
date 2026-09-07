@@ -97,6 +97,50 @@
   box-shadow: inset 2px 0 0 var(--edge);
 }
 
+/* 대화 줄. 링크 안에 버튼을 넣을 수 없으므로 둘을 형제로 두고
+ * 줄 전체가 링크처럼 보이게 한다. */
+.itemRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.itemRow .item {
+  padding-right: 30px;
+}
+
+/* 지우기는 평소 숨어 있다 — 사이드바는 대화를 고르는 곳이지 지우는 곳이
+ * 아니다. display:none이 아니라 opacity라서 탭으로는 여전히 닿는다. */
+.itemDelete {
+  position: absolute;
+  right: 5px;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--transition), color var(--transition),
+    border-color var(--transition);
+}
+
+.itemRow:hover .itemDelete,
+.itemDelete:focus-visible {
+  opacity: 1;
+}
+
+.itemDelete:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+
 .itemLabel {
   flex: 1;
   min-width: 0;

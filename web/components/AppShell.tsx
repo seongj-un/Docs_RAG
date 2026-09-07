@@ -4,7 +4,10 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+import type { Conversation } from "@/lib/api";
+
 import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { StatusMark } from "@/components/ui/StatusMark";
 import { useConversations } from "@/lib/conversations";
 import { useDocuments } from "@/lib/documents";
@@ -28,7 +31,13 @@ type AppShellProps = {
 export function AppShell({ children, crumb }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
   const { documents, loading } = useDocuments();
-  const { conversations, loading: conversationsLoading } = useConversations();
+  const {
+    conversations,
+    loading: conversationsLoading,
+    remove: removeConversation,
+  } = useConversations();
+  const [pendingDelete, setPendingDelete] = useState<Conversation | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const { user, signOut } = useSession();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -103,17 +112,26 @@ export function AppShell({ children, crumb }: AppShellProps) {
                 <p className={styles.empty}>아직 나눈 대화가 없습니다</p>
               )}
               {conversations.map((conversation) => (
-                <Link
-                  key={conversation.id}
-                  href={`/?c=${conversation.id}`}
-                  className={styles.item}
-                  data-active={conversation.id === openConversationId}
-                  onClick={closeIfOverlay}
-                >
-                  <span className={styles.itemLabel}>
-                    {conversation.title ?? "제목 없는 대화"}
-                  </span>
-                </Link>
+                <div key={conversation.id} className={styles.itemRow}>
+                  <Link
+                    href={`/?c=${conversation.id}`}
+                    className={styles.item}
+                    data-active={conversation.id === openConversationId}
+                    onClick={closeIfOverlay}
+                  >
+                    <span className={styles.itemLabel}>
+                      {conversation.title ?? "제목 없는 대화"}
+                    </span>
+                  </Link>
+                  <button
+                    type="button"
+                    className={styles.itemDelete}
+                    onClick={() => setPendingDelete(conversation)}
+                    aria-label={`${conversation.title ?? "제목 없는 대화"} 지우기`}
+                  >
+                    ✕
+                  </button>
+                </div>
               ))}
             </section>
 
@@ -194,6 +212,29 @@ export function AppShell({ children, crumb }: AppShellProps) {
         </div>
         <div className={styles.content}>{children}</div>
       </div>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={`${pendingDelete?.title ?? "제목 없는 대화"} 지우기`}
+        consequence="이 대화의 질문과 답변이 모두 사라집니다. 올린 문서는 그대로 남습니다."
+        confirmLabel="지우기"
+        busy={deleting}
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await removeConversation(pendingDelete.id);
+      /* 열려 있던 대화를 지웠으면 빈 화면에 남겨두지 않는다. */
+      if (pendingDelete.id === openConversationId) router.push("/");
+      setPendingDelete(null);
+    } finally {
+      setDeleting(false);
+    }
+  }
 }
