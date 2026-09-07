@@ -66,6 +66,38 @@ class QueryResponse(BaseModel):
     citations: list[Citation]
 
 
+class ChunkOut(BaseModel):
+    """One chunk's full text, for the evidence modal.
+
+    ``Citation.snippet`` is truncated at 240 characters for display inside an
+    answer; the modal shows the chunk the answer was actually grounded in, so
+    it needs the untruncated text. The document's name is not included — the
+    caller already holds the document list and joins on ``document_id``.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    document_id: uuid.UUID
+    chunk_index: int
+    page_from: int | None = None
+    page_to: int | None = None
+    content: str
+
+
+class UsageOut(BaseModel):
+    """Current consumption against the configured quotas.
+
+    Both halves are returned so the caller can phrase the remainder itself
+    ("82쪽 남았습니다") instead of receiving a percentage it cannot explain.
+    """
+
+    queries_today: int
+    queries_per_day: int
+    pages_this_month: int
+    pages_per_month: int
+
+
 class ConversationCreate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     scope_document_id: uuid.UUID | None = None

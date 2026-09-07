@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import run_migrations
 from app.config import settings
-from app.routers import auth, conversations, documents, query, traces
+from app.routers import auth, chunks, conversations, documents, query, traces, usage
 
 
 @asynccontextmanager
@@ -31,10 +31,12 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(chunks.router)
 app.include_router(conversations.router)
 app.include_router(documents.router)
 app.include_router(query.router)
 app.include_router(traces.router)
+app.include_router(usage.router)
 
 
 @app.get("/health", tags=["health"])
