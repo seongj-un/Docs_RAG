@@ -7,6 +7,8 @@ from app.routers import query as qr
 from app.schemas import QueryRequest
 from app.services.retrieve import RetrievedChunk
 
+USER_ID = uuid.uuid4()
+
 
 def _chunk(text: str, score: float = 0.0) -> RetrievedChunk:
     return RetrievedChunk(
@@ -26,7 +28,7 @@ def test_dense_path_skips_sparse_and_rerank(monkeypatch):
         called["embed_query"] += 1
         return [0.1]
 
-    async def fake_search(session, emb, document_id=None):
+    async def fake_search(session, emb, *, user_id, document_id=None):
         called["search"] += 1
         return [_chunk("dense hit", 0.9)]
 
@@ -44,7 +46,7 @@ def test_dense_path_skips_sparse_and_rerank(monkeypatch):
     monkeypatch.setattr(qr.rerank, "rerank", fake_rerank)
 
     body = QueryRequest(question="q", hybrid=False)
-    out = asyncio.run(qr._retrieve_chunks(None, body, use_hybrid=False))
+    out = asyncio.run(qr._retrieve_chunks(None, body, False, USER_ID))
 
     assert [c.content for c in out] == ["dense hit"]
     assert called == {"embed_query": 1, "search": 1, "rerank": 0, "embed_full": 0}
@@ -56,7 +58,7 @@ def test_hybrid_path_reranks_and_truncates(monkeypatch):
     async def fake_embed_full(text):
         return [0.1], object()
 
-    async def fake_hybrid(session, dense, sparse, document_id=None):
+    async def fake_hybrid(session, dense, sparse, *, user_id, document_id=None):
         return candidates
 
     # reranker returns worst-first on purpose; pipeline must sort/truncate.
@@ -71,7 +73,7 @@ def test_hybrid_path_reranks_and_truncates(monkeypatch):
     monkeypatch.setattr(qr.settings, "rerank_top", 3)
 
     body = QueryRequest(question="q", hybrid=True)
-    out = asyncio.run(qr._retrieve_chunks(None, body, use_hybrid=True))
+    out = asyncio.run(qr._retrieve_chunks(None, body, True, USER_ID))
 
     assert [c.content for c in out] == ["c3", "c1", "c4"]  # top-3 by reranker
     assert [c.score for c in out] == [9.0, 8.0, 7.0]  # score replaced by reranker
@@ -81,7 +83,7 @@ def test_hybrid_path_no_candidates_returns_empty(monkeypatch):
     async def fake_embed_full(text):
         return [0.1], object()
 
-    async def fake_hybrid(session, dense, sparse, document_id=None):
+    async def fake_hybrid(session, dense, sparse, *, user_id, document_id=None):
         return []
 
     async def fake_rerank(q, texts):
@@ -92,5 +94,5 @@ def test_hybrid_path_no_candidates_returns_empty(monkeypatch):
     monkeypatch.setattr(qr.rerank, "rerank", fake_rerank)
 
     body = QueryRequest(question="q", hybrid=True)
-    out = asyncio.run(qr._retrieve_chunks(None, body, use_hybrid=True))
+    out = asyncio.run(qr._retrieve_chunks(None, body, True, USER_ID))
     assert out == []
