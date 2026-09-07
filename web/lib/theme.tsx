@@ -44,6 +44,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored === "light" || stored === "dark") {
+        // localStorage는 서버 렌더에 없어 초기값으로 옮길 수 없다.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setThemeState(stored);
       }
     } catch {

@@ -301,6 +301,13 @@ class Message(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     citations: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     refused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # The scope this turn was asked under. NULL means every document. No FK:
+    # a record of what was asked must stay readable after the document is
+    # deleted — same reasoning as ``Trace.document_id``. Without it, a thread
+    # reopened later cannot say whether a refusal was scoped or corpus-wide.
+    scope_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )

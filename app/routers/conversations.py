@@ -194,7 +194,8 @@ async def _stream_turn(
                                     "cached": True, "chunks": 0})
                 yield _sse("token", {"text": hit.answer})
                 await _persist_answer(
-                    session, conversation.id, hit.answer, hit.refused, hit.citations
+                    session, conversation.id, hit.answer, hit.refused,
+                    hit.citations, scope,
                 )
                 yield _sse("done", {"answer": hit.answer, "refused": hit.refused,
                                     "citations": hit.citations, "cached": True})
@@ -213,7 +214,9 @@ async def _stream_turn(
                 yield _sse("token", {"text": answer})
                 await runner.finalize(found=found, answer=answer, refused=True,
                                       citations=[], tokens_in=0, tokens_out=0)
-                await _persist_answer(session, conversation.id, answer, True, [])
+                await _persist_answer(
+                    session, conversation.id, answer, True, [], scope
+                )
                 yield _sse("done", {"answer": answer, "refused": True,
                                     "citations": [], "cached": False})
                 return
@@ -244,7 +247,9 @@ async def _stream_turn(
                 tokens_in=final.tokens_in if final else 0,
                 tokens_out=final.tokens_out if final else 0,
             )
-            await _persist_answer(session, conversation.id, answer, refused, citations)
+            await _persist_answer(
+                session, conversation.id, answer, refused, citations, scope
+            )
             yield _sse("done", {"answer": answer, "refused": refused,
                                 "citations": citations, "cached": False})
 
@@ -262,7 +267,14 @@ async def _persist_answer(
     answer: str,
     refused: bool,
     citations: list[dict],
+    scope: uuid.UUID | None,
 ) -> None:
+    """Store the answer along with the scope it was given under.
+
+    The scope is what makes a refusal explainable when the thread is reopened:
+    "nothing in this document" and "nothing in any of your documents" are
+    different answers, and only the scope tells them apart.
+    """
     session.add(
         Message(
             conversation_id=conversation_id,
@@ -270,6 +282,7 @@ async def _persist_answer(
             content=answer,
             citations=citations or None,
             refused=refused,
+            scope_document_id=scope,
         )
     )
     await session.commit()

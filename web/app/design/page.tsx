@@ -1,5 +1,6 @@
 "use client";
 
+import { notFound } from "next/navigation";
 import { useState } from "react";
 
 import { Alert } from "@/components/ui/Alert";
@@ -19,6 +20,10 @@ const THEME_LABEL: Record<Theme, string> = {
 };
 
 export default function DesignPreview() {
+  /* 개발용 참조 화면이다. 프로덕션에서는 없는 주소로 둔다 — 사용자가 쓸
+   * 것이 아니고, 디자인 시스템의 내부 사정을 그대로 드러내기 때문. */
+  if (process.env.NODE_ENV === "production") notFound();
+
   const { theme, setTheme } = useTheme();
   const [modalOpen, setModalOpen] = useState(false);
 

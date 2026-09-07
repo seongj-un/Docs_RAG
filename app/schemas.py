@@ -120,6 +120,8 @@ class MessageOut(BaseModel):
     content: str
     citations: list[Citation] | None = None
     refused: bool
+    # Which scope the turn was asked under; NULL means every document.
+    scope_document_id: uuid.UUID | None = None
     created_at: datetime | None = None
 
 

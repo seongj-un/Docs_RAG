@@ -37,6 +37,9 @@ export function CitationModal({
     if (chunkId === null) return;
 
     let cancelled = false;
+    // 다른 근거를 열었으니 이전 원문을 즉시 치운다. 남겨두면 새 청크를
+    // 불러오는 동안 엉뚱한 근거가 보인다.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setContent(null);
     setError(null);
 

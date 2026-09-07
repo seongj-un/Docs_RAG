@@ -12,12 +12,12 @@ import uuid
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.config import settings
 from app.db import SessionLocal, engine
 from app.main import app
-from app.models import Conversation, Document
+from app.models import Conversation, Document, Message, User
 from app.services import auth, llm
 from app.services.ratelimit import query_limiter
 from app.services.retrieve import HybridResult, RetrievedChunk
@@ -397,3 +397,118 @@ def test_explicit_null_scope_means_every_document(monkeypatch):
     doc_id, inherited, widened = run_async(scenario)
     assert inherited["scope"] == doc_id
     assert widened["scope"] is None
+
+
+def test_answer_records_the_scope_it_was_given_under(monkeypatch):
+    """A refusal reads differently depending on what it was asked against.
+
+    "nothing in this document" and "nothing in any of your documents" are
+    different answers. Without the scope on the row, a thread reopened later
+    cannot tell them apart, and the notice either guesses or goes vague.
+    """
+    _stub(monkeypatch)
+
+    async def scenario():
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            email = await _signup(client)
+
+            async with SessionLocal() as session:
+                user = await auth.get_user_by_email(session, email)
+                doc = Document(
+                    user_id=user.id,
+                    filename="범위기록.pdf",
+                    mime_type="application/pdf",
+                    status="ready",
+                    num_pages=1,
+                )
+                session.add(doc)
+                await session.commit()
+                await session.refresh(doc)
+                doc_id = str(doc.id)
+
+            conv_id = (await client.post("/conversations", json={})).json()["id"]
+
+            await client.post(
+                f"/conversations/{conv_id}/query",
+                json={"question": "이 문서만", "document_id": doc_id},
+            )
+            await client.post(
+                f"/conversations/{conv_id}/query",
+                json={"question": "전체에서", "document_id": None},
+            )
+
+            detail = (await client.get(f"/conversations/{conv_id}")).json()
+
+        await _drop_user(email)
+        return doc_id, detail["messages"]
+
+    doc_id, messages = run_async(scenario)
+
+    answers = [m for m in messages if m["role"] == "assistant"]
+    assert len(answers) == 2
+    assert answers[0]["scope_document_id"] == doc_id
+    assert answers[1]["scope_document_id"] is None
+
+    # 질문 쪽은 범위를 기록하지 않는다 — 설명이 필요한 것은 답변이다.
+    questions = [m for m in messages if m["role"] == "user"]
+    assert all(m["scope_document_id"] is None for m in questions)
+
+
+def test_scope_on_a_message_survives_deleting_the_document():
+    """The row is a record of what was asked, so it outlives its subject.
+
+    ``conversations.scope_document_id`` is SET NULL because it picks a default
+    for the *next* question. This column describes a question already asked;
+    erasing it would destroy the thing it exists to remember.
+    """
+
+    async def scenario():
+        async with SessionLocal() as session:
+            user = await auth.create_user(
+                session, f"scope-{uuid.uuid4().hex[:8]}@example.com", "password123"
+            )
+            doc = Document(
+                user_id=user.id,
+                filename="지워질문서.pdf",
+                mime_type="application/pdf",
+                status="ready",
+            )
+            session.add(doc)
+            await session.commit()
+            await session.refresh(doc)
+            doc_id = doc.id
+
+            conversation = Conversation(user_id=user.id, title="기록")
+            session.add(conversation)
+            await session.commit()
+            await session.refresh(conversation)
+
+            session.add(
+                Message(
+                    conversation_id=conversation.id,
+                    role="assistant",
+                    content="제공된 문서에서 찾을 수 없습니다.",
+                    refused=True,
+                    scope_document_id=doc_id,
+                )
+            )
+            await session.commit()
+
+            await session.delete(await session.get(Document, doc_id))
+            await session.commit()
+
+            kept = (
+                await session.execute(
+                    select(Message).where(Message.conversation_id == conversation.id)
+                )
+            ).scalars().all()
+            recorded = [m.scope_document_id for m in kept]
+
+            fresh = await session.get(User, user.id)
+            await session.delete(fresh)
+            await session.commit()
+            return doc_id, recorded
+
+    doc_id, recorded = run_async(scenario)
+    assert recorded == [doc_id]

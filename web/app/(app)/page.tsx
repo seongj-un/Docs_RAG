@@ -26,20 +26,25 @@ import thread from "@/components/chat/Thread.module.css";
 
 /** 서버가 준 것과 낙관적으로 끼워 넣은 것을 같은 모양으로 다룬다.
  *
- * askedScope는 이 턴을 물었을 때의 범위다. 거부 안내가 "지금 보고 있는
- * 문서 안에는" 같은 말을 하려면 그때의 범위를 알아야 하는데, 화면의 현재
- * 범위를 읽으면 셀렉터를 바꾸는 순간 지난 답변의 설명까지 바뀐다.
- * 서버에서 불러온 이력에는 없다 — messages 테이블이 범위를 남기지 않는다.
- * 모르는 것은 모른다고 두고, 그때는 범위를 특정하지 않는 문구를 쓴다. */
-type LocalMessage = Message & { pending?: boolean; askedScope?: Scope };
+ * scope_document_id는 이 턴을 물었을 때의 범위이고 서버가 기록한다. 거부
+ * 안내가 "지금 보고 있는 문서 안에는" 같은 말을 하려면 그때의 범위를 알아야
+ * 하는데, 화면의 현재 범위를 읽으면 셀렉터를 바꾸는 순간 지난 답변의
+ * 설명까지 바뀐다. 실시간 턴도 같은 필드에 담아, 방금 받은 답변과 다시
+ * 열어본 이력이 같은 규칙으로 읽히게 한다. */
+type LocalMessage = Message & { pending?: boolean };
 
-function localMessage(role: "user" | "assistant", content: string): LocalMessage {
+function localMessage(
+  role: "user" | "assistant",
+  content: string,
+  scope: Scope = null,
+): LocalMessage {
   return {
     id: `local-${crypto.randomUUID()}`,
     role,
     content,
     citations: null,
     refused: false,
+    scope_document_id: scope,
     created_at: new Date().toISOString(),
     pending: true,
   };
@@ -135,6 +140,8 @@ function Chat() {
     if (conversationParam === loadedId.current) return;
     loadedId.current = conversationParam;
     if (conversationParam === null) {
+      // 주소(외부 상태)에 화면을 맞추는 동기화다. 파생 상태 계산이 아니다.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       resetThread();
     } else {
       void openConversation(conversationParam);
@@ -179,8 +186,8 @@ function Chat() {
                 content: event.answer,
                 citations: event.citations,
                 refused: event.refused,
+                scope_document_id: scope,
                 created_at: new Date().toISOString(),
-                askedScope: scope,
               },
             ]);
             setStreaming(null);
@@ -329,19 +336,11 @@ function Turn({ message, onWiden, onSelectFootnote }: TurnProps) {
   /* 거부는 답변이 아니라 알림으로 낸다. 카피 규칙대로 막다른 길이 아니라
    * 다음 행동을 준다 — 한 문서만 보고 물었다면 전체로 넓혀볼 수 있다.
    *
-   * 기준은 이 턴을 물었을 때의 범위다. 화면의 현재 범위를 읽으면 셀렉터를
-   * 건드리는 순간 지난 거부의 설명이 사실과 달라진다. */
+   * 기준은 이 턴을 물었을 때의 범위(서버가 기록한 scope_document_id)다.
+   * 화면의 현재 범위를 읽으면 셀렉터를 건드리는 순간 지난 거부의 설명이
+   * 사실과 달라진다. */
   if (message.refused) {
-    const asked = message.askedScope;
-
-    if (asked === undefined) {
-      // 서버에서 불러온 이력. 어떤 범위로 물었는지 알 수 없다.
-      return (
-        <Alert title="문서에서 찾을 수 없습니다">
-          이 질문에 답할 내용을 찾지 못했습니다.
-        </Alert>
-      );
-    }
+    const asked = message.scope_document_id;
 
     return (
       <Alert

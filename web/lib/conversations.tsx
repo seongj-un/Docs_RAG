@@ -45,6 +45,8 @@ export function ConversationsProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // 마운트 시 서버에서 가져온다 — 효과가 있어야 할 자리.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
   }, [refresh]);
 

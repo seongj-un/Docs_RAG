@@ -48,6 +48,8 @@ export function AppShell({ children, crumb }: AppShellProps) {
     /* 좁은 화면에서 사이드바는 본문을 덮는다. 저장된 값은 넓은 화면에서의
      * 취향이므로 여기서는 따르지 않는다 — 폰에서 열자마자 대화가 가려진다. */
     if (window.matchMedia(NARROW).matches) {
+      // matchMedia는 서버 렌더에 없어 초기값으로 옮길 수 없다.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCollapsed(true);
       return;
     }

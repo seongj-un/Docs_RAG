@@ -56,6 +56,8 @@ export type Message = {
   content: string;
   citations: Citation[] | null;
   refused: boolean;
+  /** 이 턴을 물었을 때의 범위. null이면 올린 문서 전체. */
+  scope_document_id: string | null;
   created_at: string | null;
 };
 
