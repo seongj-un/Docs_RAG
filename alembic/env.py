@@ -19,7 +19,12 @@ config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers defaults to True, which would silence every
+    # logger created before this call. The app runs migrations inside its
+    # lifespan, so that default wiped uvicorn's loggers on startup: no access
+    # log, and 500s returned a bare "Internal Server Error" with the traceback
+    # thrown away.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
