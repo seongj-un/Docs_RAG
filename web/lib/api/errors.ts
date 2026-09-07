@@ -40,10 +40,6 @@ const BY_DETAIL: Record<string, ErrorCopy> = {
     title: "지금은 답변을 만들 수 없습니다",
     hint: "사용량이 한도에 닿았습니다. 잠시 뒤에, 그래도 안 되면 내일 다시 시도해 주세요.",
   },
-  "search unavailable": {
-    title: "지금은 문서를 찾아볼 수 없습니다",
-    hint: "검색을 담당하는 서버에 닿지 못했습니다. 잠시 뒤에 다시 물어봐 주세요.",
-  },
   "model unavailable": {
     title: "지금은 답변을 만들 수 없습니다",
     hint: "AI 쪽이 잠시 붐빕니다. 잠시 뒤에 다시 물어봐 주세요.",
