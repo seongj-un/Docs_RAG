@@ -13,7 +13,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Chunk, Document
-from app.services import chunking, embeddings
+from app.services import cache, chunking, embeddings, usage
 
 
 def _extract_pages(path: str) -> list[str]:
@@ -72,7 +72,15 @@ async def index_document(document_id: uuid.UUID, file_path: str) -> None:
             )
             doc.status = "ready"
             doc.error = None
+            owner_id = doc.user_id
+            page_count = doc.num_pages or 0
             await session.commit()
+
+            # Usage drives the monthly page quota; the new document also
+            # invalidates corpus-wide cached answers, which were computed
+            # before this content existed.
+            await usage.record(session, owner_id, "ingest", pages=page_count)
+            await cache.invalidate_corpus_wide(session, owner_id)
         except Exception as exc:  # noqa: BLE001 - failures must be recorded, not raised
             await session.rollback()
             # Re-load in case the session state was lost during rollback.
