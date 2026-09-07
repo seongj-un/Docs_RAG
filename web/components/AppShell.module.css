@@ -1,0 +1,173 @@
+.shell {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* 접기/펼치기. 폭만 0으로 줄이고 안쪽은 넘치는 것을 감춘다 — 항목들을
+ * 아이콘 전용으로 다시 디자인하지 않아도 되고, 메인이 화면의 주인공이라는
+ * 원칙과도 맞는다. */
+.sidebar {
+  width: var(--sidebar-width);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+  transition: width var(--transition);
+}
+
+.sidebar[data-collapsed="true"] {
+  width: 0;
+  border-right-color: transparent;
+}
+
+.sidebarInner {
+  width: var(--sidebar-width);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 13px 11px;
+  gap: 15px;
+}
+
+.sidebarScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 17px;
+}
+
+.sidebarFoot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 11px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.sectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+}
+
+/* 사이드바 항목. 선택은 왼쪽 2px --edge 선. */
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--body);
+  font-size: 13.5px;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.item:hover {
+  background: var(--sunk);
+  color: var(--text);
+}
+
+.item[data-active="true"] {
+  background: var(--sunk);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--edge);
+}
+
+.itemLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  padding: 3px 8px;
+  font-size: 12.5px;
+  color: var(--faint);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 15px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.toggle {
+  width: 27px;
+  height: 27px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.toggle:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.crumb {
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 좁은 화면에서는 사이드바가 메인을 덮는다. 264px를 빼면 대화가 읽히지 않는다. */
+@media (max-width: 720px) {
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    box-shadow: var(--shadow);
+  }
+
+  .sidebar[data-collapsed="true"] {
+    box-shadow: none;
+  }
+}

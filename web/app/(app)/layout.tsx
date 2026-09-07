@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 
+import { DocumentsProvider } from "@/lib/documents";
 import { useSession } from "@/lib/session";
 
 /* 로그인하지 않으면 접근할 수 없는 화면들(M5 완료기준). 인증 상태는
@@ -21,5 +22,5 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   if (loading || user === null) return null;
 
-  return <>{children}</>;
+  return <DocumentsProvider>{children}</DocumentsProvider>;
 }
