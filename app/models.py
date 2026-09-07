@@ -12,6 +12,7 @@ from datetime import datetime
 from pgvector.sqlalchemy import SPARSEVEC, Vector
 from sqlalchemy import (
     Boolean,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -162,6 +163,80 @@ class UsageEvent(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class Trace(Base):
+    """One query request, recorded for diagnosis.
+
+    Traces are a diagnostic log, so they deliberately outlive what they point
+    at: ``document_id`` and ``TraceChunk.chunk_id`` carry no foreign key, and a
+    deleted document leaves its history intact. They do cascade from the user,
+    since a deleted account should take its query history with it.
+    """
+
+    __tablename__ = "traces"
+    __table_args__ = (Index("traces_user_created_idx", "user_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    hybrid: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cached: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    refused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Per-stage latency, so a slow request says *which* stage was slow.
+    embed_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    retrieve_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rerank_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    generate_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    chunks: Mapped[list["TraceChunk"]] = relationship(
+        back_populates="trace", cascade="all, delete-orphan"
+    )
+
+
+class TraceChunk(Base):
+    """A chunk as it appeared at one retrieval stage of one trace.
+
+    Keeping every stage (not just the final context) is what makes the RAG
+    Triad diagnosable: if the gold chunk is in ``dense`` but not ``rerank``,
+    the reranker dropped it; if it is in no stage at all, retrieval never found
+    it and the LLM was never the problem.
+    """
+
+    __tablename__ = "trace_chunks"
+    __table_args__ = (
+        Index("trace_chunks_trace_stage_idx", "trace_id", "stage", "rank"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    trace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("traces.id", ondelete="CASCADE"), nullable=False
+    )
+    # No FK: the chunk may be deleted later, but the trace must stay readable.
+    chunk_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    stage: Mapped[str] = mapped_column(Text, nullable=False)  # dense|sparse|rrf|rerank
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    page_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    trace: Mapped["Trace"] = relationship(back_populates="chunks")
 
 
 class QueryCache(Base):
