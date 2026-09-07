@@ -49,5 +49,13 @@ class Settings(BaseSettings):
     # Storage (M1: local disk)
     storage_dir: str = "./storage"
 
+    # --- M3: auth & tenant isolation ---
+    session_cookie_name: str = "session_id"
+    session_ttl_days: int = 14
+    # MUST be true in production — a session cookie without Secure can be sent
+    # over plain HTTP. Left false so local http://localhost development works.
+    session_cookie_secure: bool = False
+    session_cookie_samesite: str = "lax"
+
 
 settings = Settings()
