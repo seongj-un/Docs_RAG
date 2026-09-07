@@ -40,3 +40,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# npm에 잘못된 --cache 경로가 주어지면(빈 문자열 등) 여기에 레지스트리
+# 캐시를 통째로 만든다. 한 번 커밋되면 100MB 단위로 히스토리에 남는다.
+/_cacache/
+/_logs/
