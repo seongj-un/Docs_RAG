@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.db import run_migrations
-from app.routers import documents, query
+from app.routers import auth, documents, query
 
 
 @asynccontextmanager
@@ -20,6 +20,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Docs Q&A RAG (M1)", version="0.1.0", lifespan=lifespan)
 
+app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(query.router)
 

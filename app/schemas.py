@@ -3,7 +3,26 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class SignupRequest(BaseModel):
+    email: EmailStr
+    # argon2 handles long passwords; the floor is the only real requirement.
+    password: str = Field(..., min_length=8, max_length=256)
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    email: str
+    created_at: datetime | None = None
 
 
 class DocumentCreated(BaseModel):
