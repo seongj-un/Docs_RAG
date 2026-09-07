@@ -1,0 +1,42 @@
+# BGE-M3 + bge-reranker-v2-m3 behind the /embed, /embed_full and /rerank
+# contract the app already speaks (scripts/local_model_server.py).
+#
+# Separate from the API image on purpose: torch and FlagEmbedding are ~2GB and
+# the app never imports them, so keeping them here leaves the API image at
+# ~800MB and lets the two scale and deploy independently.
+#
+# CPU build. Docker on macOS runs in a Linux VM with no Metal passthrough, so
+# a container cannot use this machine's GPU — on Apple Silicon run
+# `python -m scripts.local_model_server` on the host for MPS instead.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/opt/hf \
+    OMP_NUM_THREADS=4
+
+WORKDIR /srv
+
+# The CPU wheel index keeps the CUDA runtime (several GB, useless here) out.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch \
+ && pip install --no-cache-dir FlagEmbedding fastapi "uvicorn[standard]"
+
+COPY scripts/local_model_server.py ./scripts/local_model_server.py
+COPY scripts/__init__.py ./scripts/__init__.py
+
+# Weights (~4.6GB) are not baked in: they would quadruple the image and change
+# on their own schedule. They land in the hf-cache volume on first start, so
+# only the first `docker compose up` pays for the download.
+RUN useradd --create-home --uid 10002 models \
+ && mkdir -p /opt/hf && chown -R models:models /opt/hf /srv
+USER models
+
+EXPOSE 8081
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=600s --retries=3 \
+  CMD python -c "import urllib.request,sys; \
+sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=4).status == 200 else 1)"
+
+CMD ["python", "-m", "scripts.local_model_server", \
+     "--host", "0.0.0.0", "--port", "8081", "--device", "cpu"]

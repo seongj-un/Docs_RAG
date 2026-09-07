@@ -1,0 +1,28 @@
+# Reverse proxy and TLS terminator.
+#
+# SITE_ADDRESS decides the mode. Unset it and Caddy serves plain HTTP on :80,
+# which is what you want locally. Set it to a domain (SITE_ADDRESS=qa.example.com)
+# and Caddy obtains and renews a certificate on its own — that is the whole of
+# the "public domain + HTTPS" completion criterion.
+{
+	admin off
+}
+
+# The default lives in docker-compose.yml, not here: an env var that is
+# *set but empty* wins over a Caddyfile default and leaves this block
+# without an address, which Caddy reads as a stray global block.
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# Uploads are capped at MAX_UPLOAD_MB (50) in the app; the proxy must not
+	# reject them first with a 413 of its own.
+	request_body {
+		max_size 64MB
+	}
+
+	# SSE: an answer streams token by token, so the proxy must not sit on the
+	# response waiting to fill a buffer.
+	reverse_proxy app:8000 {
+		flush_interval -1
+	}
+}

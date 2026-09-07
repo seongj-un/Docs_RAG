@@ -1,0 +1,39 @@
+# The build context is sent to the daemon in full, so everything large or
+# host-specific stays out. Without this the context is over 2GB — .venv and
+# web/node_modules alone are 2.05GB of it.
+
+# Dependencies and virtualenvs (reinstalled inside the image)
+.venv/
+venv/
+web/node_modules/
+
+# Build output and caches
+web/.next/
+web/out/
+web/tsconfig.tsbuildinfo
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets — the image must never carry them; they arrive as env at run time
+.env
+.env.*
+!.env.example
+web/.env.local
+web/.env.*.local
+
+# Host state that is not part of the image
+storage/
+.git/
+.github/
+.idea/
+.vscode/
+.DS_Store
+
+# Not needed to run the service
+eval/
+tests/
+docs/
+README.md

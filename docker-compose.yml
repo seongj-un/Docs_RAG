@@ -1,3 +1,6 @@
+# Full stack: `docker compose up` brings up the database, both models, the API
+# and the proxy. The first start downloads ~4.6GB of model weights into the
+# hf-cache volume; later starts reuse it.
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -9,21 +12,105 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # The app applies migrations at startup, so it must not start before the
+      # database can actually answer.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d docs_rag"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
-  # BGE-M3 embeddings. Requires a GPU; on CPU-only hosts run TEI elsewhere
-  # (Colab / cloud GPU) and point TEI_URL at it instead.
+  # BGE-M3 + bge-reranker-v2-m3 on CPU. Measured on this machine: embedding is
+  # comfortable there (116ms per query) while reranking is not — 16.7s at the
+  # old CAND_K=50. The CAND_K sweep (eval/candk_sweep.py) found 50 -> 5 costs
+  # no measurable quality, which brings CPU reranking to roughly 1.7s and makes
+  # this service viable without a GPU. Set CAND_K accordingly when running here.
+  models:
+    build:
+      context: .
+      dockerfile: Dockerfile.models
+    environment:
+      OMP_NUM_THREADS: ${MODEL_THREADS:-4}
+    # Not published: only `app` talks to it, over the compose network. Leaving
+    # it unpublished also keeps it out of the way of a host-side
+    # `python -m scripts.local_model_server`, which uses the same port to run
+    # the same models on the GPU.
+    expose:
+      - "8081"
+    volumes:
+      - hf-cache:/opt/hf
+
+  # GPU alternative to `models`, for hosts that have NVIDIA. Not started by
+  # default (`--profile gpu`), because macOS Docker has no GPU passthrough and
+  # a failing service would break `docker compose up` on this machine.
   tei:
+    profiles: ["gpu"]
     image: ghcr.io/huggingface/text-embeddings-inference:1.5
     command: ["--model-id", "BAAI/bge-m3"]
     ports:
       - "8080:80"
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # GEMINI_API_KEY and any tuning overrides come from .env; the values below
+    # are container addresses that .env (written for host processes) must not win.
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/docs_rag
+      TEI_URL: http://models:8081
+      RERANK_URL: http://models:8081
+      STORAGE_DIR: /srv/storage
+      # Empty leaves /admin/stats returning 404. Set ADMIN_TOKEN in .env to
+      # turn the operational view on.
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      # Trust X-Forwarded-For, so the per-IP rate limit sees real clients
+      # instead of the proxy. Safe *because this service is never published*:
+      # only `proxy` can reach it, so nobody can forge the header from outside.
+      # If you ever add a `ports:` entry here, narrow this first.
+      FORWARDED_ALLOW_IPS: "*"
+    volumes:
+      - uploads:/srv/storage
+    depends_on:
+      db:
+        condition: service_healthy
+      # Deliberately not service_healthy: the first model download takes
+      # minutes, and the API has nothing to say about it. Requests that arrive
+      # early get 503 "search unavailable" instead of the stack refusing to start.
+      models:
+        condition: service_started
+    expose:
+      - "8000"
+
+  proxy:
+    image: caddy:2-alpine
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    # Host ports are overridable because 80/443 are often already taken on a
+    # development machine. In production set HTTP_PORT=80 and HTTPS_PORT=443 —
+    # certificate issuance needs the real ports to be reachable.
+    ports:
+      - "${HTTP_PORT:-8088}:80"
+      - "${HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
 
 volumes:
   pgdata:
+  hf-cache:
+  uploads:
+  caddy-data:
+  caddy-config:

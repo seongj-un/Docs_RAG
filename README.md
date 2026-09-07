@@ -21,12 +21,35 @@ app/
 ```
 
 ## 실행
+
+### 전체 스택 (Docker)
 ```bash
-cp .env.example .env          # 값 채우기 (GEMINI_API_KEY 등)
-docker compose up -d db tei   # pgvector + BGE-M3 TEI (GPU 필요)
+cp .env.example .env     # GEMINI_API_KEY 등을 채운다
+docker compose up -d     # db · 모델 · 앱 · 프록시
+curl http://localhost:8088/health
+```
+첫 기동은 모델 가중치 약 4.6GB를 받는다(`hf-cache` 볼륨에 남아 이후엔 즉시).
+그동안 앱은 이미 떠 있고, 질의는 503 `search unavailable`로 답한다 — 모델이
+준비되기를 기다리느라 스택 전체가 멎지는 않는다.
+
+| 변수 | 기본 | 뜻 |
+| --- | --- | --- |
+| `HTTP_PORT` / `HTTPS_PORT` | 8088 / 8443 | 프록시 호스트 포트. 운영에선 80/443 |
+| `SITE_ADDRESS` | `:80` | 도메인을 넣으면 Caddy가 인증서를 자동 발급 |
+| `ADMIN_TOKEN` | (빈 값) | 비우면 `/admin/stats`가 404 |
+| `MODEL_THREADS` | 4 | 모델 컨테이너의 CPU 스레드 |
+
+**모델 서비스는 CPU다.** macOS Docker는 리눅스 VM에서 돌고 Metal이 전달되지
+않아 컨테이너가 이 맥의 GPU를 못 쓴다. NVIDIA 호스트라면
+`docker compose --profile gpu up`으로 TEI를 대신 쓴다. 애플 실리콘에서 GPU로
+돌리려면 아래 호스트 실행을 쓴다.
+
+### 개발 (호스트에서 직접)
+```bash
+docker compose up -d db       # Postgres만
 pip install -r requirements.txt
-alembic upgrade head          # 스키마 마이그레이션 (확장·테이블·HNSW)
-uvicorn app.main:app --reload # 시작 시 마이그레이션 자동 적용도 됨
+alembic upgrade head          # 시작 시 자동 적용도 됨
+uvicorn app.main:app --reload
 ```
 
 ### 임베딩·리랭킹 서버를 로컬 GPU로 (macOS/Apple Silicon)
@@ -66,7 +89,23 @@ Turbopack dev가 포트를 잡지 못하는 환경에서는 `npm run dev:webpack
 - `POST /conversations/{id}/query` — SSE 스트리밍 질의
   (`meta` → `token`* → `done`, 언제든 `error`)
 - `GET /traces` · `GET /traces/{id}` — 질의 진단 기록
+- `GET /admin/stats` — 운영 통계 (헤더 `X-Admin-Token`)
 - `GET /health`
+
+### `/admin/stats` 읽는 법
+
+M4에서 Langfuse를 기각한 이유가 여기에도 그대로 적용된다 — 필요한 숫자는
+이미 `traces`·`usage_events`에 다 있고, 없던 것은 수집 파이프라인이 아니라
+**읽을 창구**였다.
+
+- `total_ms`는 **캐시 히트 포함** — 사용자가 실제로 기다린 시간이다.
+- `stages`는 **캐시 히트 제외** — 히트는 임베딩·리랭킹·생성을 통째로 건너뛰므로,
+  섞으면 모든 단계가 실제보다 빨라 보인다.
+- `failures`는 error 문자열의 콜론 앞부분으로 묶는다. "글자 없는 PDF"와
+  "임베딩 서버 다운"이 구분돼야 하고, 파일명은 보고서에 새면 안 된다.
+
+`ADMIN_TOKEN`이 비어 있으면 401이 아니라 **404**다. 401은 설정한 적 없는
+배포에서도 이 엔드포인트의 존재를 알려주기 때문이다.
 
 ### SSE 두 가지 주의점
 
