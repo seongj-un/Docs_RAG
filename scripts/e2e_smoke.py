@@ -76,16 +76,58 @@ def embed_server_up() -> bool:
         return False
 
 
+class ApiError(RuntimeError):
+    """The server answered, but not with what this call needs to continue."""
+
+
+class RateLimited(ApiError):
+    """Throttled — a correct response to too many runs, not a bug."""
+
+
+def body(resp: httpx.Response) -> dict:
+    """Response JSON for a call that has to succeed, or a usable message.
+
+    Every ``body()`` call site expects success, so anything else stops the run
+    with the method, path, status and server text. Both failures this hit —
+    a 429 from re-running inside a minute, and a 500 whose body is the plain
+    text ``Internal Server Error`` — used to surface as a KeyError or a
+    JSONDecodeError naming neither the endpoint nor the status.
+    """
+    where = f"{resp.request.method} {resp.request.url.path} → {resp.status_code}"
+    if resp.status_code == 429:
+        raise RateLimited(
+            f"{where} (Retry-After: {resp.headers.get('Retry-After', '?')}s)"
+            f" {detail_of(resp)}. 잠시 후 다시 실행하세요."
+        )
+    if resp.status_code >= 400:
+        raise ApiError(f"{where} {detail_of(resp)}")
+    try:
+        return resp.json()
+    except ValueError:
+        raise ApiError(f"{where} JSON 아님: {resp.text[:200]!r}") from None
+
+
+def detail_of(resp: httpx.Response) -> str:
+    """The server's explanation, whether it came back as JSON or plain text."""
+    try:
+        payload = resp.json()
+    except ValueError:
+        return repr(resp.text[:200])
+    if isinstance(payload, dict) and "detail" in payload:
+        return repr(payload["detail"])
+    return repr(payload)[:200]
+
+
 def wait_status(client: httpx.Client, doc_id: str, timeout_s: int = 180) -> dict:
     deadline = time.time() + timeout_s
     seen: list[str] = []
     while time.time() < deadline:
-        body = client.get(f"/documents/{doc_id}").json()
-        if not seen or seen[-1] != body["status"]:
-            seen.append(body["status"])
-        if body["status"] in ("ready", "failed"):
-            body["_transitions"] = seen
-            return body
+        status = client.get(f"/documents/{doc_id}").json()
+        if not seen or seen[-1] != status["status"]:
+            seen.append(status["status"])
+        if status["status"] in ("ready", "failed"):
+            status["_transitions"] = seen
+            return status
         time.sleep(1)
     return {"status": "timeout", "_transitions": seen}
 
@@ -132,7 +174,7 @@ def run(base: str) -> int:
         with open(a_pdf, "rb") as fh:
             up = alice.post("/documents", files={"file": ("alice.pdf", fh, "application/pdf")})
         check("A 업로드 → 202", up.status_code == 202, f"HTTP {up.status_code}")
-        a_doc = up.json()["id"]
+        a_doc = body(up)["id"]
         st = wait_status(alice, a_doc)
         check("A 인덱싱 ready", st["status"] == "ready", f"transitions={st.get('_transitions')}")
         check("num_pages 정확", st.get("num_pages") == len(ALICE_CLAUSES))
@@ -142,7 +184,7 @@ def run(base: str) -> int:
 
     with open(bad_pdf, "rb") as fh:
         bad = alice.post("/documents", files={"file": ("broken.pdf", fh, "application/pdf")})
-    bad_id = bad.json()["id"]
+    bad_id = body(bad)["id"]
     bst = wait_status(alice, bad_id, timeout_s=60)
     check("손상 PDF → failed + error",
           bst["status"] == "failed" and bool(bst.get("error")), str(bst.get("error"))[:60])
@@ -150,17 +192,17 @@ def run(base: str) -> int:
 
     print("\n── 질의·인용·거부 (M1/M2) ──")
     if have_embed and a_doc:
-        r = alice.post("/query", json={"question": "관리비는 얼마이고 언제 납부하나요?",
-                                       "document_id": a_doc}).json()
+        r = body(alice.post("/query", json={"question": "관리비는 얼마이고 언제 납부하나요?",
+                                            "document_id": a_doc}))
         cites = [c["page_from"] for c in r["citations"]]
         check("답변 가능 질의 → 정답+인용",
               not r["refused"] and ALICE_ONLY in r["answer"], f"cites={cites}")
         check("인용 페이지가 실제 위치(p3)", 3 in cites, f"cites={cites}")
-        r2 = alice.post("/query", json={"question": "반려동물을 키울 수 있나요?",
-                                        "document_id": a_doc}).json()
+        r2 = body(alice.post("/query", json={"question": "반려동물을 키울 수 있나요?",
+                                             "document_id": a_doc}))
         check("문서에 없는 질의 → refused", r2["refused"] is True, r2["answer"][:40])
-        r3 = alice.post("/query", json={"question": "관리비는 얼마인가요?",
-                                        "document_id": a_doc, "hybrid": False}).json()
+        r3 = body(alice.post("/query", json={"question": "관리비는 얼마인가요?",
+                                             "document_id": a_doc, "hybrid": False}))
         check("dense-only(M1 경로)도 동작", not r3["refused"], r3["answer"][:40])
     else:
         for name in ("답변 가능 질의 → 정답+인용", "인용 페이지가 실제 위치(p3)",
@@ -172,7 +214,7 @@ def run(base: str) -> int:
     if have_embed:
         with open(b_pdf, "rb") as fh:
             up = bob.post("/documents", files={"file": ("bob.pdf", fh, "application/pdf")})
-        b_doc = up.json()["id"]
+        b_doc = body(up)["id"]
         check("B 인덱싱 ready", wait_status(bob, b_doc)["status"] == "ready")
     else:
         skip("B 업로드/인덱싱", "임베딩 서버 없음")
@@ -200,7 +242,7 @@ def run(base: str) -> int:
         check("B가 A의 document_id로 질의 → 404(존재 은닉)",
               resp.status_code == 404 and ALICE_ONLY not in resp.text,
               f"HTTP {resp.status_code}")
-        r = bob.post("/query", json={"question": "자기부담금은 얼마인가요?"}).json()
+        r = body(bob.post("/query", json={"question": "자기부담금은 얼마인가요?"}))
         leaked = ALICE_ONLY in r["answer"] or any(
             ALICE_ONLY in c["snippet"] for c in r["citations"])
         check("B의 전체 질의에 A 내용 미혼입", not leaked, r["answer"][:40])
@@ -240,7 +282,14 @@ def run(base: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", default="http://127.0.0.1:8000")
-    return run(parser.parse_args().base)
+    try:
+        return run(parser.parse_args().base)
+    except RateLimited as exc:
+        print(f"\n[중단] rate limit: {exc}")
+        return 2
+    except ApiError as exc:
+        print(f"\n[중단] {exc}")
+        return 2
 
 
 if __name__ == "__main__":
