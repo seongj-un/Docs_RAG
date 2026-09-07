@@ -14,6 +14,8 @@ const BACKEND_DETAILS = [
   "email already registered",
   "invalid email or password",
   "search unavailable",
+  "model quota exceeded",
+  "model unavailable",
 ];
 
 describe("describeError", () => {
