@@ -15,7 +15,11 @@ function parseFrame(raw: string): SseFrame | null {
   let event = "message";
   const dataLines: string[] = [];
 
-  for (const line of raw.split("\n")) {
+  for (const rawLine of raw.split("\n")) {
+    /* 경계는 CRLF로 찾아냈어도 프레임 *안쪽* 줄바꿈은 여전히 CRLF일 수 있다.
+     * \r를 남겨두면 event 이름이 "meta\r"가 되어 호출자의 분기가 전부
+     * default로 떨어진다 — 사건이 조용히 버려지고 답변이 오지 않는다. */
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
     if (line === "" || line.startsWith(":")) continue; // 주석·빈 줄
 
     const colon = line.indexOf(":");

@@ -40,6 +40,10 @@ const BY_DETAIL: Record<string, ErrorCopy> = {
     title: "지금은 답변을 만들 수 없습니다",
     hint: "사용량이 한도에 닿았습니다. 잠시 뒤에, 그래도 안 되면 내일 다시 시도해 주세요.",
   },
+  "search unavailable": {
+    title: "지금은 문서를 찾아볼 수 없습니다",
+    hint: "검색을 담당하는 서버에 닿지 못했습니다. 잠시 뒤에 다시 물어봐 주세요.",
+  },
   "model unavailable": {
     title: "지금은 답변을 만들 수 없습니다",
     hint: "AI 쪽이 잠시 붐빕니다. 잠시 뒤에 다시 물어봐 주세요.",
@@ -55,6 +59,13 @@ const BY_DETAIL: Record<string, ErrorCopy> = {
   "invalid email or password": {
     title: "이메일이나 비밀번호가 맞지 않습니다",
     hint: "다시 확인해 주세요.",
+  },
+  /* 임베딩·리랭커 서버가 죽은 경우(503). 백엔드가 Retry-After를 주지
+   * 않는 것과 같은 이유로 "잠시 뒤에 다시"라고 하지 않는다 — 쿼터와 달리
+   * 대개 누가 서버를 다시 켜야 풀린다. 기다리라고만 하면 틀린 조언이다. */
+  "search unavailable": {
+    title: "지금은 답을 찾아드릴 수 없습니다",
+    hint: "문서를 찾아주는 서버가 응답하지 않습니다. 올린 문서와 지난 대화는 그대로 있습니다.",
   },
 };
 
