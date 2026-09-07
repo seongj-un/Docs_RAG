@@ -1,0 +1,8 @@
+# Benchmark-only dependencies (scripts/bench_cpu_serving.py).
+#
+# Deliberately NOT in requirements.txt: the application calls the embedding and
+# rerank models over HTTP and never imports torch, so adding these would put
+# ~2GB of unused wheels into the production image. Install only when measuring
+# local model serving.
+torch>=2.4
+FlagEmbedding>=1.3
