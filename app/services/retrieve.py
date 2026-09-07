@@ -31,6 +31,20 @@ class RetrievedChunk:
     score: float
 
 
+@dataclass
+class HybridResult:
+    """Fused candidates plus the component rankings that produced them.
+
+    The per-retriever rankings are kept so a trace can record what each stage
+    saw — without them, "the reranker dropped the right chunk" and "retrieval
+    never found it" look identical after the fact.
+    """
+
+    candidates: list[RetrievedChunk]
+    dense_ids: list[uuid.UUID]
+    sparse_ids: list[uuid.UUID]
+
+
 def _owned_chunks(user_id: uuid.UUID, document_id: uuid.UUID | None):
     """Base SELECT restricted to chunks of documents owned by ``user_id``."""
     stmt = select(Chunk).join(Document, Chunk.document_id == Document.id).where(
@@ -84,14 +98,15 @@ async def hybrid_search(
     user_id: uuid.UUID,
     document_id: uuid.UUID | None = None,
     cand_k: int | None = None,
-) -> list[RetrievedChunk]:
+) -> HybridResult:
     """Dense + sparse first-stage retrieval fused with RRF, scoped to the user.
 
     Runs a dense cosine top-N and a sparse inner-product top-N over the user's
     own chunks, then fuses the two rankings by chunk id via Reciprocal Rank
     Fusion. Returns up to ``cand_k`` fused candidates (``score`` = RRF score)
-    for the reranker to reorder. Rows without a sparse vector (un-backfilled M1
-    rows) are simply absent from the sparse ranking.
+    for the reranker to reorder, along with each component ranking for tracing.
+    Rows without a sparse vector (un-backfilled M1 rows) are simply absent from
+    the sparse ranking.
     """
     cand_k = cand_k or settings.cand_k
 
@@ -113,8 +128,14 @@ async def hybrid_search(
     by_id: dict[uuid.UUID, Chunk] = {r.id: r for r in dense_rows}
     by_id.update({r.id: r for r in sparse_rows})
 
-    fused = reciprocal_rank_fusion(
-        [[r.id for r in dense_rows], [r.id for r in sparse_rows]],
-        k=settings.rrf_k,
+    dense_ids = [r.id for r in dense_rows]
+    sparse_ids = [r.id for r in sparse_rows]
+    fused = reciprocal_rank_fusion([dense_ids, sparse_ids], k=settings.rrf_k)
+
+    return HybridResult(
+        candidates=[
+            _to_retrieved(by_id[cid], score) for cid, score in fused[:cand_k]
+        ],
+        dense_ids=dense_ids,
+        sparse_ids=sparse_ids,
     )
-    return [_to_retrieved(by_id[cid], score) for cid, score in fused[:cand_k]]
