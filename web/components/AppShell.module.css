@@ -158,6 +158,12 @@
   overflow-y: auto;
 }
 
+/* 스크림은 덮개일 때만 존재한다 — 넓은 화면에서 사이드바는 자리를 차지하지
+ * 남의 위에 얹히지 않으므로 뒤를 가릴 것이 없다. */
+.scrim {
+  display: none;
+}
+
 /* 좁은 화면에서는 사이드바가 메인을 덮는다. 264px를 빼면 대화가 읽히지 않는다. */
 @media (max-width: 720px) {
   .sidebar {
@@ -169,5 +175,15 @@
 
   .sidebar[data-collapsed="true"] {
     box-shadow: none;
+  }
+
+  .scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 29;
+    border: none;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.32);
   }
 }

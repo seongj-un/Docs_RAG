@@ -1,6 +1,6 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { AppShell } from "@/components/AppShell";
@@ -57,12 +57,7 @@ export default function ChatPage() {
 function Chat() {
   const searchParams = useSearchParams();
   const { documents } = useDocuments();
-  const {
-    conversations,
-    loading: conversationsLoading,
-    create,
-    refresh: refreshConversations,
-  } = useConversations();
+  const { create, refresh: refreshConversations } = useConversations();
 
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<LocalMessage[]>([]);
@@ -71,19 +66,23 @@ function Chat() {
   const [turnError, setTurnError] = useState<ErrorCopy | null>(null);
   /** 실패한 질문. 재시도 버튼이 이걸 다시 보낸다. */
   const [lastQuestion, setLastQuestion] = useState<string | null>(null);
-  const [scope, setScope] = useState<Scope>(null);
+  /* 문서 상세의 "이 문서에 질문하기"가 범위를 들고 온다. 효과로 맞추지 않고
+   * 초기값으로 읽는다 — 다른 경로에서 넘어오는 것이라 이 화면은 새로
+   * 마운트되고, 효과로 하면 첫 프레임이 잘못된 범위로 한 번 그려진다. */
+  const [scope, setScope] = useState<Scope>(
+    () => searchParams.get("document") || null,
+  );
   const [openFootnote, setOpenFootnote] = useState<{
     footnotes: Footnote[];
     number: number;
   } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
-
-  /* 문서 상세의 "이 문서에 질문하기"가 범위를 들고 온다. */
-  const documentParam = searchParams.get("document");
-  useEffect(() => {
-    if (documentParam) setScope(documentParam);
-  }, [documentParam]);
+  /* 지금 화면에 올라온 대화의 id. 주소와 비교하는 기준이며, 상태가 아니라
+   * ref다 — 첫 질문에서 대화를 만든 직후 주소가 아직 안 바뀐 찰나에
+   * 상태로 비교하면 방금 만든 대화를 새 대화로 오인해 지운다. */
+  const loadedId = useRef<string | null>(null);
+  const router = useRouter();
 
   /* 새 글자가 붙을 때마다 바닥을 따라간다. */
   useEffect(() => {
@@ -98,20 +97,36 @@ function Chat() {
     setTurnError(null);
     try {
       const detail = await api.getConversation(id);
-      setMessages(detail.messages);
-      setScope(detail.scope_document_id);
+      /* 응답이 기대한 모양이 아니어도 화면이 죽지는 않게 한다. */
+      setMessages(detail.messages ?? []);
+      setScope(detail.scope_document_id ?? null);
     } catch (cause) {
       setTurnError(describeError(cause));
     }
   }, []);
 
-  function startNewConversation() {
+  function resetThread() {
     setConversationId(null);
     setMessages([]);
     setStreaming(null);
     setTurnError(null);
     setLastQuestion(null);
   }
+
+  /* 빈 문자열은 "고르지 않음"이다. 그대로 두면 /conversations/ 를 부르게
+   * 되고, 그 경로는 목록 라우트로 넘어가 배열이 돌아온다. */
+  const conversationParam = searchParams.get("c") || null;
+  useEffect(() => {
+    if (conversationParam === loadedId.current) return;
+    loadedId.current = conversationParam;
+    if (conversationParam === null) {
+      resetThread();
+    } else {
+      void openConversation(conversationParam);
+    }
+    // resetThread는 상태 setter만 부르므로 의존성에 넣지 않는다.
+  }, [conversationParam, openConversation]);
+
 
   const ask = useCallback(
     async (question: string) => {
@@ -129,6 +144,9 @@ function Chat() {
            * 빈 대화가 사이드바에 쌓이지 않게. */
           id = (await create(scope)).id;
           setConversationId(id);
+          /* 주소를 먼저 맞춰야 위 효과가 이 대화를 새 대화로 오인하지 않는다. */
+          loadedId.current = id;
+          router.replace(`/?c=${id}`);
         }
 
         for await (const event of api.streamQuery(id, question, {
@@ -176,7 +194,7 @@ function Chat() {
         void refreshConversations();
       }
     },
-    [conversationId, create, scope, refreshConversations],
+    [conversationId, create, scope, refreshConversations, router],
   );
 
   function openFootnoteFor(footnotes: Footnote[], number: number) {
@@ -189,34 +207,7 @@ function Chat() {
   const busy = streaming !== null;
 
   return (
-    <AppShell
-      crumb="대화"
-      onNewConversation={startNewConversation}
-      conversations={
-        <section className={styles.section}>
-          <div className={styles.sectionHead}>대화</div>
-          {conversationsLoading && (
-            <p className={styles.empty2}>불러오는 중…</p>
-          )}
-          {!conversationsLoading && conversations.length === 0 && (
-            <p className={styles.empty2}>아직 나눈 대화가 없습니다</p>
-          )}
-          {conversations.map((conversation) => (
-            <button
-              key={conversation.id}
-              type="button"
-              className={styles.item}
-              data-active={conversation.id === conversationId}
-              onClick={() => void openConversation(conversation.id)}
-            >
-              <span className={styles.itemLabel}>
-                {conversation.title ?? "제목 없는 대화"}
-              </span>
-            </button>
-          ))}
-        </section>
-      }
-    >
+    <AppShell crumb="대화">
       <div className={styles.screen}>
         <div className={styles.scroll} ref={scrollRef}>
           {messages.length === 0 && streaming === null && (

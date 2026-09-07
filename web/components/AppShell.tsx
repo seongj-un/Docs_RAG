@@ -1,46 +1,58 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { Button } from "@/components/ui/Button";
 import { StatusMark } from "@/components/ui/StatusMark";
+import { useConversations } from "@/lib/conversations";
 import { useDocuments } from "@/lib/documents";
 import { useSession } from "@/lib/session";
 import styles from "./AppShell.module.css";
 
 const COLLAPSE_KEY = "sidebar-collapsed";
+/* AppShell.module.css의 중단점과 같아야 한다 — 여기서 덮개로 바뀐다. */
+const NARROW = "(max-width: 720px)";
 
 type AppShellProps = {
   children: ReactNode;
   /** 상단 바에 남기는 현재 위치. 화면이 스스로 제목을 갖는다. */
   crumb?: string;
-  /** 사이드바 대화 이력 자리. P4에서 채워진다. */
-  conversations?: ReactNode;
-  /** 새 대화 버튼. 채팅 화면에서만 의미가 있다. */
-  onNewConversation?: () => void;
 };
 
-export function AppShell({
-  children,
-  crumb,
-  conversations,
-  onNewConversation,
-}: AppShellProps) {
+/* 사이드바는 화면마다 다르지 않다 — 대화 이력도 문서 목록도 어디서나 같은
+ * 자리에 있다. 그래서 목록을 화면에서 주입받지 않고 셸이 직접 그린다.
+ * 대화는 /?c=<id>로 연다. 상태가 아니라 주소라서 새로고침해도 남고,
+ * 설정이나 문서 화면에서 눌러도 채팅으로 옮겨간다. */
+export function AppShell({ children, crumb }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
   const { documents, loading } = useDocuments();
+  const { conversations, loading: conversationsLoading } = useConversations();
   const { user, signOut } = useSession();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
+  const openConversationId = searchParams.get("c");
 
   useEffect(() => {
+    /* 좁은 화면에서 사이드바는 본문을 덮는다. 저장된 값은 넓은 화면에서의
+     * 취향이므로 여기서는 따르지 않는다 — 폰에서 열자마자 대화가 가려진다. */
+    if (window.matchMedia(NARROW).matches) {
+      setCollapsed(true);
+      return;
+    }
     try {
       setCollapsed(localStorage.getItem(COLLAPSE_KEY) === "true");
     } catch {
       /* 저장소가 막혀 있으면 펼친 상태로 시작한다. */
     }
   }, []);
+
+  /* 덮개일 때는 항목을 고르면 닫는다. 안 그러면 고른 화면이 계속 가려진다. */
+  function closeIfOverlay() {
+    if (window.matchMedia(NARROW).matches) setCollapsed(true);
+  }
 
   function toggleSidebar() {
     setCollapsed((current) => {
@@ -70,17 +82,49 @@ export function AppShell({
         aria-label="문서와 대화"
       >
         <div className={styles.sidebarInner}>
-          {onNewConversation && (
-            <Button onClick={onNewConversation}>새 대화</Button>
-          )}
+          <Button
+            onClick={() => {
+              router.push("/");
+              closeIfOverlay();
+            }}
+          >
+            새 대화
+          </Button>
 
           <div className={styles.sidebarScroll}>
-            {conversations}
+            <section className={styles.section}>
+              <div className={styles.sectionHead}>
+                <span>대화</span>
+              </div>
+              {conversationsLoading && (
+                <p className={styles.empty}>불러오는 중…</p>
+              )}
+              {!conversationsLoading && conversations.length === 0 && (
+                <p className={styles.empty}>아직 나눈 대화가 없습니다</p>
+              )}
+              {conversations.map((conversation) => (
+                <Link
+                  key={conversation.id}
+                  href={`/?c=${conversation.id}`}
+                  className={styles.item}
+                  data-active={conversation.id === openConversationId}
+                  onClick={closeIfOverlay}
+                >
+                  <span className={styles.itemLabel}>
+                    {conversation.title ?? "제목 없는 대화"}
+                  </span>
+                </Link>
+              ))}
+            </section>
 
             <section className={styles.section}>
               <div className={styles.sectionHead}>
                 <span>문서</span>
-                <Link className={styles.crumb} href="/documents">
+                <Link
+                  className={styles.crumb}
+                  href="/documents"
+                  onClick={closeIfOverlay}
+                >
                   관리
                 </Link>
               </div>
@@ -94,6 +138,7 @@ export function AppShell({
                   href={`/documents/${document.id}`}
                   className={styles.item}
                   data-active={pathname === `/documents/${document.id}`}
+                  onClick={closeIfOverlay}
                 >
                   <StatusMark
                     status={document.status}
@@ -111,6 +156,7 @@ export function AppShell({
               href="/settings"
               className={styles.item}
               data-active={pathname === "/settings"}
+              onClick={closeIfOverlay}
             >
               <span className={styles.itemLabel}>설정</span>
             </Link>
@@ -122,6 +168,16 @@ export function AppShell({
           </div>
         </div>
       </aside>
+
+      {!collapsed && (
+        <button
+          type="button"
+          className={styles.scrim}
+          onClick={() => setCollapsed(true)}
+          aria-label="사이드바 닫기"
+          tabIndex={-1}
+        />
+      )}
 
       <div className={styles.main}>
         <div className={styles.topbar}>

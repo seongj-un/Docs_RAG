@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, type ReactNode } from "react";
+import { Suspense, useEffect, type ReactNode } from "react";
 
 import { ConversationsProvider } from "@/lib/conversations";
 import { DocumentsProvider } from "@/lib/documents";
@@ -23,9 +23,13 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   if (loading || user === null) return null;
 
+  /* AppShell이 useSearchParams를 쓴다. Next 16은 그 위에 Suspense 경계를
+   * 요구하고, 모든 화면이 셸을 거치므로 여기 한 번만 둔다. */
   return (
     <DocumentsProvider>
-      <ConversationsProvider>{children}</ConversationsProvider>
+      <ConversationsProvider>
+        <Suspense fallback={null}>{children}</Suspense>
+      </ConversationsProvider>
     </DocumentsProvider>
   );
 }

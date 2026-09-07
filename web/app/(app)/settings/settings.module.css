@@ -1,0 +1,46 @@
+.screen {
+  margin: 0 auto;
+  padding: 27px 24px 48px;
+  max-width: var(--width-screen);
+  display: flex;
+  flex-direction: column;
+  gap: 27px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  padding: 17px 19px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--raise);
+}
+
+.cardHead {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cardNote {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.segment {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+}
+
+.value {
+  font-size: 14px;
+  color: var(--body);
+}

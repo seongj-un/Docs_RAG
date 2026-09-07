@@ -1,0 +1,52 @@
+.usage {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 11px;
+}
+
+.label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.count {
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.track {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--sunk);
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  /* 평상시엔 조용히, 임박하면 배경 대비 최대 대비로. */
+  background: var(--muted);
+  transition: width var(--transition), background var(--transition);
+}
+
+.fill[data-near="true"] {
+  background: var(--edge);
+}
+
+/* 경고는 색이 아니라 문장이 한다. */
+.note {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.note[data-near="true"] {
+  color: var(--text);
+}
