@@ -63,3 +63,5 @@ class TokenBucketLimiter:
 # and abuse profiles differ (per the spec: "업로드와 질의 분리").
 query_limiter = TokenBucketLimiter(settings.rate_limit_query_per_min)
 upload_limiter = TokenBucketLimiter(settings.rate_limit_upload_per_min)
+# 인증 시도는 비용이 아니라 추측을 막는 것이 목적이라 예산이 따로다.
+auth_limiter = TokenBucketLimiter(settings.rate_limit_auth_per_min)

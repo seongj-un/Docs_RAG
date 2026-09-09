@@ -35,6 +35,12 @@ export const BY_DETAIL: Record<string, ErrorCopy> = {
     title: "오늘 쓸 수 있는 질문을 다 썼습니다",
     hint: "내일 다시 채워집니다.",
   },
+  /* 로그인·가입 시도 제한(429). 비밀번호를 틀린 것이 아니라 너무 자주
+   * 시도한 것이므로, "다시 확인해 주세요"가 아니라 기다리라고 말해야 한다. */
+  "auth rate limit exceeded": {
+    title: "시도가 너무 잦습니다",
+    hint: "잠시 뒤에 다시 로그인해 주세요.",
+  },
   "upload rate limit exceeded": {
     title: "문서를 너무 빠르게 올리고 있습니다",
     hint: "잠시 뒤에 다시 올려 주세요.",

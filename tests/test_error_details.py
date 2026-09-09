@@ -26,6 +26,7 @@ DETAIL_MAPPED = {
     "query rate limit exceeded",
     "daily query quota exceeded",
     "upload rate limit exceeded",
+    "auth rate limit exceeded",
     "monthly upload page quota exceeded",
     "email already registered",
     "invalid email or password",

@@ -97,7 +97,12 @@ class Settings(BaseSettings):
     session_ttl_days: int = 14
     # MUST be true in production — a session cookie without Secure can be sent
     # over plain HTTP. Left false so local http://localhost development works.
-    session_cookie_secure: bool = False
+    # 기본을 True 로 둔다. 잊었을 때 안전한 쪽으로 실패해야 한다 — 반대로
+    # 두면 공개 배포에서 세션 쿠키가 평문 HTTP 로도 나가는데 아무 증상이 없다.
+    # 이 값이 True 여도 브라우저는 http://localhost 를 신뢰 가능한 출처로
+    # 취급하므로 로컬 개발은 그대로 된다. 평문 HTTP 로 외부에 노출하는
+    # 예외적인 경우에만 false 로 내린다.
+    session_cookie_secure: bool = True
     session_cookie_samesite: str = "lax"
     # M5 frontend runs on its own origin and must send the session cookie, so
     # credentials are allowed — which forbids a "*" origin. List them exactly.
@@ -108,6 +113,9 @@ class Settings(BaseSettings):
     # correct for a single instance, multiplied by N behind N workers.
     rate_limit_query_per_min: int = 20
     rate_limit_upload_per_min: int = 5
+    # 로그인·가입 시도. 업로드·질의에만 제한이 있고 인증에는 없어서, 8자
+    # 비밀번호에 무제한으로 시도할 수 있었다.
+    rate_limit_auth_per_min: int = 10
     # Quotas are counted in the database, so they hold across processes.
     quota_queries_per_day: int = 200
     quota_upload_pages_per_month: int = 1000
