@@ -126,5 +126,27 @@ class Settings(BaseSettings):
     semantic_cache_enabled: bool = True
     semantic_cache_threshold: float = 0.95
 
+    # --- 이메일 인증 ---
+    # console 은 링크를 로그로만 찍는다. RESEND_API_KEY 가 비어 있으면
+    # resend 로 설정돼 있어도 console 로 내려온다 — 키 없이 clone 해도
+    # 앱이 뜨고 테스트가 돌아야 하기 때문이다.
+    mail_provider: str = "console"
+    resend_api_key: str = ""
+    # 도메인이 없으면 Resend 는 이 주소로만 보낼 수 있고, 수신도 계정
+    # 소유자 본인에게만 전달된다. 공개 배포 시 no-reply@<도메인> 으로 바꾼다.
+    mail_from: str = "onboarding@resend.dev"
+    # 인증 링크가 가리키는 프론트엔드 오리진. 백엔드가 아니다 — 메일 링크는
+    # /verify 페이지로 가고 그 페이지가 POST 를 친다.
+    app_base_url: str = "http://localhost:3000"
+    verify_token_ttl_hours: int = 24
+    # 미인증 계정의 맛보기 한도. 기존 쿼터와 달리 **계정 수명 전체 누적**이다.
+    # "하루 5회"로 두면 미인증 계정이 매일 5회씩 영원히 쓸 수 있어, 막으려던
+    # 재가입 어뷰즈가 그대로 통과한다. 0 이면 게이트를 끈다.
+    unverified_quota_queries: int = 5
+    unverified_quota_documents: int = 1
+    # 인증 메일 재발송. 자기 메일함만 채우는 행위지만 Resend 무료 한도가
+    # 하루 100통이라 태울 수 있다.
+    rate_limit_verify_resend_per_min: int = 1
+
 
 settings = Settings()

@@ -39,9 +39,19 @@ class User(Base):
     )
     email: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    # NULL 이면 미인증. boolean 이 아니라 시각인 이유는 "인증했나"보다
+    # "가입 후 얼마 만에 인증했나"가 어뷰즈 조사에서 실제로 쓰이기 때문이다.
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
+
+    @property
+    def email_verified(self) -> bool:
+        """UserOut(from_attributes=True) 이 그대로 읽어간다."""
+        return self.email_verified_at is not None
 
 
 class Session(Base):
@@ -58,6 +68,40 @@ class Session(Base):
     )
     expires_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class EmailVerificationToken(Base):
+    """1회용 이메일 인증 토큰. 저장하는 것은 sha256 해시이고 원문은 링크에만.
+
+    argon2 를 쓰지 않는 이유는 토큰이 사용자가 고른 비밀번호가 아니라 256비트
+    난수라서다. 사전 공격 대상이 아니므로 느린 해시가 방어하는 것이 없고,
+    반대로 솔트 때문에 인덱스 조회가 불가능해져 검증마다 전체를 훑게 된다.
+
+    소비된 행은 지우지 않는다. 남겨야 두 번째 클릭에 "만료됐다"가 아니라
+    "이미 인증하셨다"고 말할 수 있다.
+    """
+
+    __tablename__ = "email_verification_tokens"
+    __table_args__ = (
+        Index("email_verification_tokens_user_id_idx", "user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
