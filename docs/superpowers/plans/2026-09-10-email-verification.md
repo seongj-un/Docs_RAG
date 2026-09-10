@@ -16,6 +16,8 @@
 - 새 detail 문자열을 추가하면 `web/lib/api/errors.ts`의 `BY_DETAIL`과 `tests/test_error_details.py`의 `DETAIL_MAPPED` **양쪽**에 넣는다. 한쪽만 넣으면 그 테스트가 실패하고, 둘 다 빠뜨리면 사용자가 틀린 조언을 받는다.
 - 그 대조는 양방향이라 백엔드와 프론트가 **같이** 있어야 통과한다. 백엔드 detail 이 먼저 들어가는 Task 4~6 동안 `tests/test_error_details.py`는 빨간불이며, 각 태스크의 테스트 명령이 `--ignore` 로 제외한다. Task 7 이 카피와 `DETAIL_MAPPED`를 함께 넣어 다시 초록불로 만든다. **그때까지 이 파일을 건드리지 않는다.**
 - 사용자에게 보이는 문구는 (원인 + 해결 방법) 둘 다 준다. 제목에 시스템 용어(영문 4글자 이상 소문자)를 넣지 않는다 — `web/lib/api/errors.test.ts`가 정규식으로 막는다.
+- 이 저장소에는 **`pytest-asyncio` 가 없다**(설치된 것은 `pytest`·`anyio`·`nest-asyncio` 뿐). 그래서 아래 태스크들의 테스트 코드에 보이는 `pytest.mark.asyncio` 와 `async def test_*` 는 **그대로 쓰면 안 된다** — "async def functions are not natively supported" 로 죽는다. 테스트의 **이름·단언·독스트링은 그대로 두고 실행 방식만** 저장소의 기존 관례로 감싼다: 동기 `def test_*` 안에서 코루틴을 만들어 `run_async(scenario)` 로 돌리고, DB 를 쓰는 파일은 상단에 `pytestmark = pytest.mark.skipif(not _db_available(), reason="Postgres not reachable")` 를 둔다. `run_async` 와 `_db_available` 의 정본은 `tests/test_verification.py`(Task 1 에서 작성됨)와 `tests/test_isolation.py` 에 있다. DB 가 필요 없는 async 테스트는 `asyncio.run(...)` 으로 충분하다.
+- HTTP 테스트의 `AsyncClient` 는 `base_url="http://test"` 로 둔다. `tests/conftest.py` 가 테스트 세션 동안 `session_cookie_secure` 를 내리고 레이트리밋 버킷을 테스트마다 비우므로, 세션 쿠키가 정상으로 오가고 테스트 안에서 `.reset()` 을 부를 필요가 없다.
 - 마이그레이션은 autogenerate 하지 않고 손으로 쓴다. 기존 `0001`~`0007`이 전부 그렇다.
 - 커밋 메시지는 한국어 본문. 무엇을 왜 바꿨는지 적는다.
 - 브랜치는 `feat/email-verification` (이미 생성됨, 스펙 커밋 `d716428`이 올라가 있다).
