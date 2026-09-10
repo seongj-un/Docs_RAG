@@ -14,6 +14,7 @@
 
 - Python은 반드시 `.venv/bin/python`으로 실행한다. 시스템 python에는 pymupdf가 없어 테스트가 수집 단계에서 죽는다.
 - 새 detail 문자열을 추가하면 `web/lib/api/errors.ts`의 `BY_DETAIL`과 `tests/test_error_details.py`의 `DETAIL_MAPPED` **양쪽**에 넣는다. 한쪽만 넣으면 그 테스트가 실패하고, 둘 다 빠뜨리면 사용자가 틀린 조언을 받는다.
+- 그 대조는 양방향이라 백엔드와 프론트가 **같이** 있어야 통과한다. 백엔드 detail 이 먼저 들어가는 Task 4~6 동안 `tests/test_error_details.py`는 빨간불이며, 각 태스크의 테스트 명령이 `--ignore` 로 제외한다. Task 7 이 카피와 `DETAIL_MAPPED`를 함께 넣어 다시 초록불로 만든다. **그때까지 이 파일을 건드리지 않는다.**
 - 사용자에게 보이는 문구는 (원인 + 해결 방법) 둘 다 준다. 제목에 시스템 용어(영문 4글자 이상 소문자)를 넣지 않는다 — `web/lib/api/errors.test.ts`가 정규식으로 막는다.
 - 마이그레이션은 autogenerate 하지 않고 손으로 쓴다. 기존 `0001`~`0007`이 전부 그렇다.
 - 커밋 메시지는 한국어 본문. 무엇을 왜 바꿨는지 적는다.
@@ -1223,29 +1224,19 @@ async def resend_verification(
     background.add_task(_deliver_verification, user.email, raw)
 ```
 
-- [ ] **Step 6: `DETAIL_MAPPED` 갱신**
+- [ ] **Step 6: 테스트가 통과하는지 확인**
 
-`tests/test_error_details.py`의 `DETAIL_MAPPED` 집합에 세 줄을 추가한다. (네 번째 `email verification required`는 Task 5에서 추가한다 — 아직 코드에 없으면 그 테스트가 실패한다.)
+Run: `.venv/bin/python -m pytest tests/test_verification_api.py -v`
+Expected: 8 passed
 
-```python
-    "invalid or expired token",
-    "email already verified",
-    "verification email rate limit exceeded",
-```
+> **`tests/test_error_details.py`는 이 태스크에서 건드리지 않는다.** 그 테스트는 백엔드의 detail 문자열과 프론트의 `errors.ts` 표를 **양방향**으로 대조하므로, 둘 중 하나만 있으면 어느 쪽을 먼저 넣어도 빨간불이다. 새 detail 넷과 그 카피는 Task 7에서 한 번에 들어가고, 거기서 이 테스트가 다시 초록불이 된다. Task 4~6 동안에는 아래처럼 제외하고 돌린다.
 
-- [ ] **Step 7: 테스트가 통과하는지 확인**
-
-Run: `.venv/bin/python -m pytest tests/test_verification_api.py tests/test_error_details.py -v`
-Expected: 8 passed + test_error_details 전부 통과
-
-> `test_error_details.py`가 "프론트엔드에 카피가 없다"고 실패하면 그게 정상이다. Task 7에서 `errors.ts`를 채운다. 그때까지 이 태스크의 커밋은 그 실패를 안고 간다 — **이 경우 Step 6을 Task 7로 미루고, 여기서는 `tests/test_verification_api.py`만 돌린다.**
-
-- [ ] **Step 8: 전체 테스트로 회귀 확인**
+- [ ] **Step 7: 전체 테스트로 회귀 확인**
 
 Run: `.venv/bin/python -m pytest tests/ -v -x --ignore=tests/test_error_details.py`
 Expected: 기존 테스트가 전부 통과. `UserOut`에 필드가 늘어난 것은 기존 응답을 깨지 않는다.
 
-- [ ] **Step 9: 커밋**
+- [ ] **Step 8: 커밋**
 
 ```bash
 git add app/schemas.py app/services/ratelimit.py app/routers/auth.py tests/test_verification_api.py
@@ -1578,14 +1569,6 @@ from app.deps import VERIFICATION_REQUIRED, get_current_user
 Run: `.venv/bin/python -m pytest tests/test_cost_report.py -v`
 Expected: 통과 (이 테스트는 집계 결과 dict 를 직접 만들어 검사하므로 쿼리를 타지 않는다 — 회귀만 확인한다)
 
-- [ ] **Step 8: `DETAIL_MAPPED` 갱신**
-
-`tests/test_error_details.py`의 `DETAIL_MAPPED`에 추가한다.
-
-```python
-    "email verification required",
-```
-
 - [ ] **Step 9: 테스트가 통과하는지 확인**
 
 Run: `.venv/bin/python -m pytest tests/test_unverified_gate.py -v`
@@ -1689,7 +1672,7 @@ Expected: 기존 테스트 전부 통과. 기존 계정은 전부 verified 이�
 - [ ] **Step 12: 커밋**
 
 ```bash
-git add app/services/usage.py app/deps.py app/services/pipeline.py app/routers/documents.py tests/test_unverified_gate.py tests/test_verification_api.py tests/test_error_details.py
+git add app/services/usage.py app/deps.py app/services/pipeline.py app/routers/documents.py scripts/cost_report.py tests/test_unverified_gate.py tests/test_verification_api.py
 git commit -m "$(cat <<'MSG'
 feat(quota): 미인증 계정은 맛보기 쿼터만
 
@@ -1995,10 +1978,19 @@ export function resendVerification(): Promise<void> {
 Run: `cd web && npm test`
 Expected: 전부 통과 (기존 테스트 포함 — `BACKEND_DETAILS`를 순회하는 검사가 새 4개도 함께 본다)
 
-- [ ] **Step 7: 백엔드 대조 테스트 확인**
+- [ ] **Step 7: `DETAIL_MAPPED` 갱신과 대조 확인**
+
+`tests/test_error_details.py`의 `DETAIL_MAPPED` 집합에 네 줄을 추가한다. 프론트 카피(Step 3)와 **같은 태스크에서** 넣는 이유는 이 테스트가 양방향 대조라서다 — 한쪽만 있으면 어느 쪽을 먼저 넣어도 실패한다.
+
+```python
+    "email verification required",
+    "invalid or expired token",
+    "email already verified",
+    "verification email rate limit exceeded",
+```
 
 Run: `.venv/bin/python -m pytest tests/test_error_details.py -v`
-Expected: PASS — 이제 백엔드의 4개 detail 모두 프론트에 카피가 있다
+Expected: PASS — 백엔드의 detail 넷과 프론트 카피 넷이 맞물린다
 
 - [ ] **Step 8: 타입 검사**
 
@@ -2008,7 +2000,7 @@ Expected: 에러 없음
 - [ ] **Step 9: 커밋**
 
 ```bash
-git add web/lib/api/types.ts web/lib/api/auth.ts web/lib/api/errors.ts web/lib/api/errors.test.ts
+git add web/lib/api/types.ts web/lib/api/auth.ts web/lib/api/errors.ts web/lib/api/errors.test.ts tests/test_error_details.py
 git commit -m "$(cat <<'MSG'
 feat(web): 인증 API 타입과 에러 카피 4개
 
