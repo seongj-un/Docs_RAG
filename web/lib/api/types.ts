@@ -7,6 +7,8 @@ export type DocumentStatus = "pending" | "processing" | "ready" | "failed";
 export type User = {
   id: string;
   email: string;
+  /** 미인증이면 맛보기 쿼터만 쓸 수 있다. */
+  email_verified: boolean;
   created_at: string | null;
 };
 
@@ -70,4 +72,11 @@ export type Usage = {
   queries_per_day: number;
   pages_this_month: number;
   pages_per_month: number;
+  /* 미인증 계정은 다른 한도를 다른 창(계정 수명 전체 누적)으로 센다.
+   * 그래서 숫자만이 아니라 "내일 다시 채워집니다" 같은 문구도 달라진다. */
+  email_verified: boolean;
+  queries_total: number;
+  documents_total: number;
+  unverified_query_limit: number;
+  unverified_document_limit: number;
 };

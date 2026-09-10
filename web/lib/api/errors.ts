@@ -65,6 +65,25 @@ export const BY_DETAIL: Record<string, ErrorCopy> = {
     title: "이메일이나 비밀번호가 맞지 않습니다",
     hint: "다시 확인해 주세요.",
   },
+  /* 이메일 인증(403). 쿼터의 429와 달리 기다려서 풀리지 않는다 —
+   * 사용자가 메일의 링크를 눌러야 한다. */
+  "email verification required": {
+    title: "이메일 확인이 필요합니다",
+    hint: "가입할 때 보낸 메일의 링크를 눌러 주세요. 안 왔다면 다시 보낼 수 있습니다.",
+  },
+  "invalid or expired token": {
+    title: "링크가 만료됐습니다",
+    hint: "24시간이 지나면 링크가 닫힙니다. 새 링크를 받아 주세요.",
+  },
+  /* 실패가 아니라 이미 끝났다는 뜻이다. 사용자가 할 일이 없다. */
+  "email already verified": {
+    title: "이미 확인된 이메일입니다",
+    hint: "그대로 사용하시면 됩니다.",
+  },
+  "verification email rate limit exceeded": {
+    title: "메일을 방금 보냈습니다",
+    hint: "1분 뒤에 다시 요청해 주세요. 스팸함도 확인해 보세요.",
+  },
   /* 임베딩·리랭커 서버가 죽은 경우(503). 백엔드가 Retry-After를 주지
    * 않는 것과 같은 이유로 "잠시 뒤에 다시"라고 하지 않는다 — 쿼터와 달리
    * 대개 누가 서버를 다시 켜야 풀린다. 기다리라고만 하면 틀린 조언이다. */

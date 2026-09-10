@@ -102,6 +102,37 @@ describe("describeError", () => {
       expect(copy.title).not.toMatch(/[a-z]{4,}/);
     }
   });
+
+  it("인증이 필요한 403은 기다리라고 하지 않는다", () => {
+    /* 쿼터와 달리 시간이 지나도 풀리지 않는다. 사용자가 메일의 링크를
+     * 눌러야 한다 — "잠시 뒤에 다시"는 틀린 조언이다. */
+    const copy = describeError(
+      new ApiError(403, "email verification required"),
+    );
+
+    expect(copy.title).toBe("이메일 확인이 필요합니다");
+    expect(copy.hint).not.toContain("잠시 뒤");
+    expect(copy.hint).toContain("메일");
+  });
+
+  it("만료된 링크와 이미 쓴 링크를 다르게 안내한다", () => {
+    /* 둘 다 "링크가 안 된다"지만 다음 행동이 다르다: 하나는 새 링크를
+     * 받아야 하고, 다른 하나는 아무것도 할 필요가 없다. */
+    const expired = describeError(new ApiError(400, "invalid or expired token"));
+    const already = describeError(new ApiError(409, "email already verified"));
+
+    expect(expired).not.toEqual(already);
+    expect(expired.hint).toContain("새 링크");
+  });
+
+  it("재발송 제한은 스팸함을 함께 안내한다", () => {
+    const copy = describeError(
+      new ApiError(429, "verification email rate limit exceeded"),
+    );
+
+    expect(copy.title).toBe("메일을 방금 보냈습니다");
+    expect(copy.hint).toContain("스팸함");
+  });
 });
 
 describe("ApiError", () => {
