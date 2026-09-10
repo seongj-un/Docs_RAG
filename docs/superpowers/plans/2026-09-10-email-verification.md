@@ -1361,7 +1361,9 @@ async def test_the_query_window_is_lifetime_not_today():
         await session.execute(
             text(
                 "UPDATE usage_events SET created_at = :then WHERE user_id = :uid"
-            ).bindparams(then=yesterday, uid=str(user.id))
+            # uid 를 str 로 넘기면 asyncpg 가 ::VARCHAR 로 컴파일해서
+            # "operator does not exist: uuid = character varying" 로 죽는다.
+            ).bindparams(then=yesterday, uid=user.id)
         )
         await session.commit()
 
