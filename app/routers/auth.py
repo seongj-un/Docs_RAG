@@ -110,7 +110,8 @@ async def signup(
     # 일이 없으므로 rollback 은 부르지 않는다: 부르면 위에서 커밋된 user
     # 객체가 만료되고, expire_on_commit=False 로도 못 막는 재조회가 응답
     # 직렬화 시점에 AsyncSession 밖에서 일어나 MissingGreenlet 으로 죽는다.
-    # 복구 경로는 /auth/resend-verification(로그인 뒤 재발송 버튼)이다.
+    # 복구 경로는 /auth/resend-verification 이다. 위에서 쿠키를 이미
+    # 심었으므로 다시 로그인할 필요 없이 그대로 부를 수 있다.
     try:
         raw = await verification.issue_token(session, user.id)
     except Exception:  # noqa: BLE001 - 토큰 발급 실패가 가입 성공을 되돌리면 안 된다

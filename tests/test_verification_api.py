@@ -301,3 +301,34 @@ def test_the_second_upload_is_refused_and_deleting_does_not_reopen_it():
     third = run_async(scenario)
 
     assert third.status_code == 403, "문서를 지우자 한도가 초기화됐다"
+
+
+def test_issue_token_failure_during_signup_still_returns_201_with_a_session(
+    monkeypatch,
+):
+    """토큰 발급이 죽어도 계정·세션·쿠키는 살아남아야 한다.
+
+    고치기 전에는 셋이 각각 독립적으로 커밋되면서 공통 실패 경계가 없었다.
+    가입 후반이 죽으면 계정은 이미 남았는데 응답은 500 이고, 예약된 메일은
+    지연이 아니라 폐기됐다(FastAPI 는 정상 반환일 때만 배경 작업을 응답에
+    붙인다). 재시도하면 409 "이미 가입됨"이라 사용자는 갇혔다.
+
+    결정적으로 재현하려면 몽키패치가 필요하다. 이 파일에는 없던 방식이지만
+    스위트 전체에서는 흔하다 — test_conversations.py 의 exploding_stream,
+    test_phase2.py 의 exploding_generate 가 같은 모양이다.
+    """
+
+    async def exploding_issue_token(session, user_id):
+        raise RuntimeError("simulated db blip")
+
+    monkeypatch.setattr(verification, "issue_token", exploding_issue_token)
+
+    async def scenario():
+        async with await _client() as client:
+            _, body = await _signup(client)  # 201 을 내부에서 단언한다
+            return body, settings.session_cookie_name in client.cookies
+
+    body, has_cookie = run_async(scenario)
+
+    assert body["email_verified"] is False
+    assert has_cookie, "세션 쿠키가 없으면 사용자는 재발송 버튼에 닿을 수 없다"
