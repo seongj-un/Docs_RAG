@@ -36,4 +36,8 @@ async def get_usage(
         documents_total=await usage_service.documents_total(session, user.id),
         unverified_query_limit=settings.unverified_quota_queries,
         unverified_document_limit=settings.unverified_quota_documents,
+        pages_uploaded_total=await usage_service.pages_uploaded_total(
+            session, user.id
+        ),
+        unverified_page_limit=settings.unverified_quota_pages,
     )

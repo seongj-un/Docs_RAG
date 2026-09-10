@@ -114,6 +114,11 @@ class UsageOut(BaseModel):
     documents_total: int
     unverified_query_limit: int
     unverified_document_limit: int
+    # 미인증 계정은 문서 개수와 쪽수 **양쪽**에 막힌다. 쪽수를 내려보내지
+    # 않으면 "문서 0/1"인 화면에서 60쪽짜리가 거절당하고, 사용자는 남았다고
+    # 적힌 한도에 왜 막혔는지 알 길이 없다.
+    pages_uploaded_total: int
+    unverified_page_limit: int
 
 
 class ConversationCreate(BaseModel):

@@ -132,6 +132,16 @@ export default function SettingsPage() {
                     unit="개"
                     refill={`이메일을 확인하면 한 달 ${usage.pages_per_month.toLocaleString()}쪽으로 늘어납니다.`}
                   />
+                  {/* 문서 개수와 쪽수 양쪽에 막힌다. 쪽수 바가 없으면
+                      "문서 0/1"인 화면에서 두꺼운 PDF 한 장이 거절당하고,
+                      사용자는 남았다고 적힌 한도에 왜 막혔는지 알 수 없다. */}
+                  <UsageBar
+                    label="지금까지 올린 쪽수"
+                    used={usage.pages_uploaded_total}
+                    limit={usage.unverified_page_limit}
+                    unit="쪽"
+                    refill={`이메일을 확인하면 한 달 ${usage.pages_per_month.toLocaleString()}쪽으로 늘어납니다.`}
+                  />
                 </>
               )}
             </>

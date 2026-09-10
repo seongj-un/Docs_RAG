@@ -66,8 +66,10 @@ def test_unverified_usage_reports_the_taster_limits():
                 # 나와서, 이 테스트가 막으려는 바로 그 혼동을 통과시킨다.
                 for _ in range(3):
                     await usage.record(session, user_id, "query")
-                for _ in range(2):
-                    await usage.record(session, user_id, "upload")
+                # 쪽수도 서로 다르게 둔다. upload 와 ingest 가 둘 다 쪽수를
+                # 나르므로, 어느 한쪽이 모든 kind 를 합산하면 22 가 나온다.
+                await usage.record(session, user_id, "upload", pages=7)
+                await usage.record(session, user_id, "upload", pages=11)
                 await usage.record(session, user_id, "ingest", pages=4)
 
             return (await client.get("/usage")).json()
@@ -80,9 +82,13 @@ def test_unverified_usage_reports_the_taster_limits():
     assert body["documents_total"] == 2
     assert body["unverified_query_limit"] == settings.unverified_quota_queries
     assert body["unverified_document_limit"] == settings.unverified_quota_documents
+    # 18 이어야 한다. ingest 까지 합치면 22, ingest 만 보면 4 가 나온다.
+    assert body["pages_uploaded_total"] == 18
+    assert body["unverified_page_limit"] == settings.unverified_quota_pages
     # 기존 필드는 뜻까지 그대로 남는다 — 인증하고 나면 화면이 이쪽을 쓴다.
     # pages_this_month 는 ingest 의 쪽수만 세므로 upload 2건에 영향받지 않는다.
     assert body["queries_today"] == 3
+    # ingest 만 센다 — upload 가 나르는 18쪽이 여기 섞이면 안 된다.
     assert body["pages_this_month"] == 4
     assert body["queries_per_day"] == settings.quota_queries_per_day
     assert body["pages_per_month"] == settings.quota_upload_pages_per_month

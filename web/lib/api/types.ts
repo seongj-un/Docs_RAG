@@ -79,4 +79,8 @@ export type Usage = {
   documents_total: number;
   unverified_query_limit: number;
   unverified_document_limit: number;
+  /* 미인증 계정은 문서 개수와 쪽수 양쪽에 막힌다. 쪽수를 보여주지
+   * 않으면 '문서 0/1'인 화면에서 거절당하는 일이 설명되지 않는다. */
+  pages_uploaded_total: number;
+  unverified_page_limit: number;
 };
