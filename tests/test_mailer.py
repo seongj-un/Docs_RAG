@@ -1,6 +1,7 @@
 """메일 전송 어댑터. 인프라가 필요 없다 — 네트워크는 가짜로 대체한다."""
 
 import asyncio
+import logging
 
 from app.config import settings
 from app.services import mailer
@@ -28,7 +29,13 @@ def test_resend_is_used_when_configured():
 
 
 def test_console_mailer_logs_the_link(caplog):
-    """개발 중에는 로그가 메일함이다. 링크가 보이지 않으면 쓸모가 없다."""
+    """개발 중에는 로그가 메일함이다. 링크가 보이지 않으면 쓸모가 없다.
+
+    레벨을 INFO 로 낮춰 잡지 않는다. 그렇게 하면 "호출이 일어났다"만
+    증명되고 "실제 서버에서 보인다"는 증명되지 않는다 — uvicorn 기본
+    설정에서 앱 로거 유효 레벨은 WARNING 이라, INFO 로 찍던 시절 이 줄은
+    로컬 서버 어디에도 나타나지 않았고 계정을 인증할 방법이 없었다.
+    """
 
     async def scenario():
         await mailer.ConsoleMailer().send(
@@ -38,12 +45,14 @@ def test_console_mailer_logs_the_link(caplog):
             text="https://example.test/verify?token=abc",
         )
 
-    with caplog.at_level("INFO"):
+    with caplog.at_level("WARNING"):
         asyncio.run(scenario())
 
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "who@example.com" in logged
     assert "https://example.test/verify?token=abc" in logged
+    assert caplog.records, "기록이 하나도 없으면 링크는 아무 데도 안 나온다"
+    assert all(r.levelno >= logging.WARNING for r in caplog.records)
 
 
 def test_warns_when_resend_is_live_but_the_link_still_points_at_localhost(caplog):

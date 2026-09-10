@@ -28,10 +28,19 @@ class Mailer(Protocol):
 
 
 class ConsoleMailer:
-    """링크를 로그로 찍는다. 개발과 테스트에서 이게 메일함이다."""
+    """링크를 로그로 찍는다. 개발과 테스트에서 이게 메일함이다.
+
+    INFO 가 아니라 WARNING 인 이유: uvicorn 기본 로깅 설정에서 앱 로거의
+    유효 레벨은 WARNING 이고 루트에 핸들러가 없다. INFO 로 찍으면 이 줄은
+    **어디에도 나타나지 않고**, 그러면 로컬에서 계정을 인증할 방법이 아예
+    사라진다 — 이 어댑터가 존재하는 이유가 통째로 없어진다.
+
+    레벨이 과하지도 않다. 이 어댑터가 도는 것 자체가 "메일이 실제로는
+    배달되지 않고 있다"는 뜻이라, 운영에서 보이면 그건 알아야 할 상태다.
+    """
 
     async def send(self, *, to: str, subject: str, html: str, text: str) -> None:
-        logger.info("[mail] to=%s subject=%s\n%s", to, subject, text)
+        logger.warning("[mail] to=%s subject=%s\n%s", to, subject, text)
 
 
 class ResendMailer:
