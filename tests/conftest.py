@@ -96,6 +96,31 @@ def http_session_cookies():
     settings.session_cookie_secure = original
 
 
+@pytest.fixture(autouse=True, scope="session")
+def no_real_email():
+    """메일 프로바이더를 콘솔로 고정한다 — 진짜로 보내면 안 되니까.
+
+    ``app/config.py`` 는 앱과 테스트가 같은 ``.env`` 를 읽는다. 누군가
+    README 대로 배포 준비를 하며 ``MAIL_PROVIDER=resend`` 와
+    ``RESEND_API_KEY`` 를 채워두면, 다음 ``pytest`` 실행이 그대로
+    ``api.resend.com`` 에 실제 발송을 시도한다. 이 스위트만 해도 가입을
+    수십 번 만든다 — ``test_auth_ratelimit.py`` 하나가 열두 번(레이트리밋
+    한도 + 2), ``/auth/signup`` 을 부르는 테스트는 아홉 개 파일에 흩어져
+    있다. 존재하지 않는 ``@example.com`` 주소로 나가는 진짜 메일은 Resend
+    무료 한도(하루 100통)를 태우고 발신 도메인에 하드 바운스를 남긴다.
+
+    ``isolated_storage`` 가 저장 경로에 대해 하는 일과 같다 — 실제 자원을
+    설정값 하나 잘못 둔 것만으로 건드리지 못하게 세션 내내 못박는다.
+    """
+    original_provider = settings.mail_provider
+    original_key = settings.resend_api_key
+    settings.mail_provider = "console"
+    settings.resend_api_key = ""
+    yield
+    settings.mail_provider = original_provider
+    settings.resend_api_key = original_key
+
+
 @pytest.fixture(autouse=True)
 def fresh_rate_limits():
     """레이트리밋 버킷을 테스트마다 비운다.
