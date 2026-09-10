@@ -61,9 +61,13 @@ def test_unverified_usage_reports_the_taster_limits():
             user_id = uuid.UUID(signup.json()["id"])
 
             async with SessionLocal() as session:
-                await usage.record(session, user_id, "query")
-                # 게이트가 세는 것은 수락된 업로드다 — 색인 성공(ingest)이 아니다.
-                await usage.record(session, user_id, "upload")
+                # 세 종류의 개수를 일부러 다르게 둔다. 전부 1개씩이면
+                # documents_total 이 upload 대신 ingest 를 세도 똑같이 1 이
+                # 나와서, 이 테스트가 막으려는 바로 그 혼동을 통과시킨다.
+                for _ in range(3):
+                    await usage.record(session, user_id, "query")
+                for _ in range(2):
+                    await usage.record(session, user_id, "upload")
                 await usage.record(session, user_id, "ingest", pages=4)
 
             return (await client.get("/usage")).json()
@@ -71,9 +75,14 @@ def test_unverified_usage_reports_the_taster_limits():
     body = run_async(scenario)
 
     assert body["email_verified"] is False
-    assert body["queries_total"] == 1
-    assert body["documents_total"] == 1
+    assert body["queries_total"] == 3
+    # 2 여야 한다. ingest(1건) 를 셌다면 1, query(3건) 를 셌다면 3 이 나온다.
+    assert body["documents_total"] == 2
     assert body["unverified_query_limit"] == settings.unverified_quota_queries
     assert body["unverified_document_limit"] == settings.unverified_quota_documents
-    # 기존 필드는 그대로 남는다 — 인증하고 나면 화면이 이쪽을 쓴다.
+    # 기존 필드는 뜻까지 그대로 남는다 — 인증하고 나면 화면이 이쪽을 쓴다.
+    # pages_this_month 는 ingest 의 쪽수만 세므로 upload 2건에 영향받지 않는다.
+    assert body["queries_today"] == 3
+    assert body["pages_this_month"] == 4
     assert body["queries_per_day"] == settings.quota_queries_per_day
+    assert body["pages_per_month"] == settings.quota_upload_pages_per_month
