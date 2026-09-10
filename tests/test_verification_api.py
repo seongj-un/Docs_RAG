@@ -190,6 +190,33 @@ def test_resend_to_a_verified_account_is_a_409():
     assert response.json()["detail"] == "email already verified"
 
 
+def test_resend_to_a_verified_account_never_burns_the_rate_limit():
+    """already-verified 는 리미터보다 먼저 걸려야 한다.
+
+    분당 1 회라 순서가 뒤집히면(리미터를 먼저 소비) 티가 난다: 첫 호출은
+    빈 버킷이 아직 여유가 있어 통과하고 email_verified 에서 409 로 끝나
+    "우연히" 맞아 보이지만, 두 번째 호출은 리미터가 이미 바닥나 429 로
+    샌다. 검증된 계정은 몇 번을 다시 불러도 항상 409 여야 하고, 그건
+    리미터 토큰을 전혀 축내지 않을 때만 성립한다.
+    """
+
+    async def scenario():
+        async with await _client() as client:
+            email, _ = await _signup(client)
+            token = await _token_for(email)
+            await client.post("/auth/verify", json={"token": token})
+
+            first = await client.post("/auth/resend-verification")
+            second = await client.post("/auth/resend-verification")
+        return first, second
+
+    first, second = run_async(scenario)
+
+    for response in (first, second):
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "email already verified"
+
+
 def test_the_sixth_question_is_refused_until_verified():
     """맛보기를 다 쓰면 429 가 아니라 403 이어야 한다 — 기다려도 안 풀린다."""
     from app.services import usage

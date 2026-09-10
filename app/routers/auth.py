@@ -97,12 +97,29 @@ async def signup(
             detail="email already registered",
         ) from None
 
-    # 토큰 발급은 요청 안에서(DB 가 필요하다), 발송만 밖에서.
-    raw = await verification.issue_token(session, user.id)
-    background.add_task(_deliver_verification, user.email, raw)
-
+    # 계정 행이 생긴 뒤로는 가입이 성공해야 한다. 세션만 예외다 — 세션이
+    # 없으면 응답에 실을 쿠키가 없고, 쿠키 없는 201 은 거짓말이 된다. 그래서
+    # "반드시 필요한" 이 호출을 가장 먼저 끝내, 뒤에 오는 어떤 실패도 이미
+    # 만든 응답을 되돌릴 수 없게 한다.
     row = await auth.create_session(session, user.id)
     _set_session_cookie(response, row.id)
+
+    # 토큰 발급·메일 예약은 "있으면 좋은" 단계다(DB 는 토큰 발급에만
+    # 필요하고, 발송 자체는 밖에서 한다) — 여기서 나는 예외가 이미 만든
+    # 계정·세션을 500 으로 되돌리면 안 된다. 실패해도 이 세션으로 더 할
+    # 일이 없으므로 rollback 은 부르지 않는다: 부르면 위에서 커밋된 user
+    # 객체가 만료되고, expire_on_commit=False 로도 못 막는 재조회가 응답
+    # 직렬화 시점에 AsyncSession 밖에서 일어나 MissingGreenlet 으로 죽는다.
+    # 복구 경로는 /auth/resend-verification(로그인 뒤 재발송 버튼)이다.
+    try:
+        raw = await verification.issue_token(session, user.id)
+    except Exception:  # noqa: BLE001 - 토큰 발급 실패가 가입 성공을 되돌리면 안 된다
+        logger.exception(
+            "가입 직후 인증 토큰 발급 실패: user_id=%s email=%s", user.id, user.email
+        )
+    else:
+        background.add_task(_deliver_verification, user.email, raw)
+
     return user
 
 
