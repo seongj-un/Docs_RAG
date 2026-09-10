@@ -120,14 +120,17 @@ export default function SettingsPage() {
                     used={usage.queries_total}
                     limit={usage.unverified_query_limit}
                     unit="개"
-                    refill="이메일을 확인하면 하루 200개로 늘어납니다."
+                    /* 200과 1000을 문구에 박아두면 QUOTA_* 환경변수를 바꾸는
+                     * 순간 화면이 거짓말을 한다 — 같은 usage 객체에 이미 있는
+                     * 값을 그대로 읽는다. */
+                    refill={`이메일을 확인하면 하루 ${usage.queries_per_day.toLocaleString()}개로 늘어납니다.`}
                   />
                   <UsageBar
                     label="지금까지 올린 문서"
                     used={usage.documents_total}
                     limit={usage.unverified_document_limit}
                     unit="개"
-                    refill="이메일을 확인하면 한 달 1000쪽으로 늘어납니다."
+                    refill={`이메일을 확인하면 한 달 ${usage.pages_per_month.toLocaleString()}쪽으로 늘어납니다.`}
                   />
                 </>
               )}
