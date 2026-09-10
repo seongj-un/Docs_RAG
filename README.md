@@ -362,8 +362,16 @@ python -m eval.judge_run         # 위 기록으로 4개 품질 지표 산출
 
 ```bash
 EMBED_MODEL_URL=http://tei:80 RERANK_MODEL_URL=http://tei-rerank:80 \
-  docker compose --profile gpu up -d
+  docker compose --profile gpu up -d db app web proxy tei tei-rerank
 ```
+
+**서비스를 명시하는 이유:** `models` 컨테이너에는 프로파일이 없어서 그냥
+`up -d` 라고 하면 GPU 프로파일에서도 함께 뜬다. 그런데 위처럼 두 URL 을
+TEI 로 돌려놓으면 아무도 그 컨테이너를 부르지 않는다 — 그냥 `up -d` 로
+띄우면 BGE-M3 와 리랭커를 **기동 시점에 CPU RAM 으로 올려놓고**
+(`scripts/local_model_server.py` 상단: "Models load at startup and stay
+resident") 한 번도 안 쓰인 채 상주한다. 가중치만 약 6.9GB 다. 위처럼
+서비스를 나열하거나 `--scale models=0` 을 붙여서 빼야 한다.
 
 (`tei-rerank`와 `EMBED_MODEL_URL`/`RERANK_MODEL_URL`은 이번에 추가됐다.
 전에는 `tei` 하나만 있었는데, `MODEL_URL` 하나로 임베딩·리랭킹 주소가
