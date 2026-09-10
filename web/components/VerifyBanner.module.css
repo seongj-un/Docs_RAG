@@ -1,0 +1,25 @@
+/* 상단 바 바로 아래, 폭 전체를 그대로 쓰는 띠. Alert처럼 카드 여백을 두면
+ * 셸의 가장자리와 어긋나 보인다 — 이 배너는 화면이 아니라 셸에 속한다. */
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 11px;
+  padding: 11px 15px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--sunk);
+}
+
+.message {
+  font-size: 13.5px;
+  color: var(--body);
+}
+
+/* 색이 아니라 대비로 강조한다(디자인 원칙: 색상 없음). UsageBar의
+ * data-near와 같은 방식 — --muted보다 진한 --text로만 눈에 띈다. */
+.error {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}

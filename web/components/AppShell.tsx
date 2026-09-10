@@ -9,6 +9,7 @@ import type { Conversation } from "@/lib/api";
 import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { StatusMark } from "@/components/ui/StatusMark";
+import { VerifyBanner } from "@/components/VerifyBanner";
 import { useConversations } from "@/lib/conversations";
 import { useDocuments } from "@/lib/documents";
 import { useSession } from "@/lib/session";
@@ -217,6 +218,9 @@ export function AppShell({ children, crumb }: AppShellProps) {
           </button>
           {crumb && <span className={styles.crumb}>{crumb}</span>}
         </div>
+        {/* 사이드바가 아니라 본문 위 — 좁은 화면에서 사이드바는 덮개로 바뀌어
+         * 화면 밖에 있는 것과 같아지므로, 배너를 거기 두면 가려진다. */}
+        <VerifyBanner />
         {/* tabIndex={-1}이라야 앵커로 건너뛴 뒤 포커스가 실제로 여기 앉는다 —
             없으면 스크롤만 되고 다음 Tab이 문서 처음으로 돌아간다. */}
         <div id="main" className={styles.content} tabIndex={-1}>

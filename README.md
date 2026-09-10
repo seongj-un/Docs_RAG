@@ -228,6 +228,14 @@ per-IP rate limit이 `request.client.host`를 쓴다. 프록시를 붙이면 그
 | `RERANK_MAX_CHARS` | 0 (끔) | 리랭커 입력 자르기. 측정 결과 켜면 안 된다 |
 | `RATE_LIMIT_*` · `QUOTA_*` | 20/분 · 200/일 · 1000쪽/월 | 남용 방지 |
 | `SEMANTIC_CACHE_THRESHOLD` | 0.95 | 코사인 유사도 |
+| `MAIL_PROVIDER` | `console` | 메일 발송 방식. `console`은 로그에 `[mail]` 줄로만 찍고, `resend`면 실제 발송 |
+| `RESEND_API_KEY` | — | `resend` 발송 시 필수 |
+| `MAIL_FROM` | `onboarding@resend.dev` | 발신 주소. 도메인 인증 전엔 이 주소만, 수신도 계정 소유자에게만 간다 |
+| `APP_BASE_URL` | `http://localhost:3000` | 인증 링크가 가리키는 프론트엔드 오리진(백엔드 아님) |
+| `VERIFY_TOKEN_TTL_HOURS` | 24 | 인증 링크 유효 시간 |
+| `UNVERIFIED_QUOTA_QUERIES` | 5 | 미인증 계정 질의 한도. **계정 수명 전체 누적** |
+| `UNVERIFIED_QUOTA_DOCUMENTS` | 1 | 미인증 계정 업로드 한도. 역시 수명 전체 누적 |
+| `RATE_LIMIT_VERIFY_RESEND_PER_MIN` | 1/분 | 인증 메일 재발송 제한 |
 
 > `MIN_SCORE`(코사인)를 리랭커 시그모이드에 재사용했다가 답변 가능한 질문의
 > 21%를 LLM 호출도 없이 거부한 적이 있다. 두 점수는 같은 양이 아니다.
@@ -246,6 +254,21 @@ per-IP rate limit이 `request.client.host`를 쓴다. 프록시를 붙이면 그
 503 `model unavailable` 로 실패했다). 유료 티어로 가면 기본값으로 돌아오면 된다.
 
 `EVAL_LLM_MODEL` 이 이미 flash-lite 인 것도 같은 이유다(M4).
+
+### 이메일 인증
+
+가입하면 확인 메일이 나간다. 확인 전에는 질문 5회·문서 1개까지만 쓸 수
+있고 그 뒤로는 403이 나온다 — 이 한도는 하루가 아니라 **계정 수명 전체
+누적**이다. "하루 5회"로 두면 미인증 계정이 매일 5회씩 다시 받아서, 막으려던
+재가입 어뷰즈가 그대로 통과하기 때문이다.
+
+`MAIL_PROVIDER=console`(기본)이면 메일 대신 링크가 서버 로그에 `[mail]`
+줄로 찍힌다. 실제 발송은 `MAIL_PROVIDER=resend` + `RESEND_API_KEY`.
+
+**도메인이 없으면 본인 주소로만 전달된다.** Resend 는 도메인을 검증하기
+전까지 `onboarding@resend.dev` 발신만 허용하고, 그 경우 수신도 계정
+소유자에게만 간다. 남이 가입해서 인증까지 마치게 하려면 도메인을 붙이고
+SPF/DKIM 을 설정한 뒤 `MAIL_FROM` 을 바꾼다. 코드 변경은 필요 없다.
 
 ## 테스트
 

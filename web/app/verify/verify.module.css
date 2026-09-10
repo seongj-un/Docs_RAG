@@ -1,0 +1,51 @@
+/* login.module.css와 같은 골격 — /verify도 (app) 셸 없이 화면 하나로
+ * 서 있는 페이지다(로그인 전 방문자가 여는 것이 정상 경로이므로). */
+.screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.card {
+  width: 100%;
+  max-width: var(--width-login);
+  display: flex;
+  flex-direction: column;
+  gap: 19px;
+}
+
+.heading {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.subtitle {
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+/* 밑줄 + 두께로만 강조한다 — 색상 없음 원칙(styles/tokens.css). */
+.link {
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* 재발송 실패 메시지. VerifyBanner.module.css의 .error와 같은 규칙 —
+ * --muted보다 진한 --text로만 눈에 띈다. */
+.error {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}

@@ -93,20 +93,44 @@ export default function SettingsPage() {
 
           {usage !== null && (
             <>
-              <UsageBar
-                label="오늘 한 질문"
-                used={usage.queries_today}
-                limit={usage.queries_per_day}
-                unit="개"
-                refill="내일 다시 채워집니다."
-              />
-              <UsageBar
-                label="이번 달 올린 쪽수"
-                used={usage.pages_this_month}
-                limit={usage.pages_per_month}
-                unit="쪽"
-                refill="다음 달 1일에 다시 채워집니다."
-              />
+              {usage.email_verified ? (
+                <>
+                  <UsageBar
+                    label="오늘 한 질문"
+                    used={usage.queries_today}
+                    limit={usage.queries_per_day}
+                    unit="개"
+                    refill="내일 다시 채워집니다."
+                  />
+                  <UsageBar
+                    label="이번 달 올린 쪽수"
+                    used={usage.pages_this_month}
+                    limit={usage.pages_per_month}
+                    unit="쪽"
+                    refill="다음 달 1일에 다시 채워집니다."
+                  />
+                </>
+              ) : (
+                /* 미인증 한도는 수명 전체 누적이라 다시 채워지지 않는다.
+                 * 인증한 계정의 문구("내일 다시 채워집니다")를 그대로 쓰면
+                 * 화면이 거짓말을 한다. */
+                <>
+                  <UsageBar
+                    label="지금까지 한 질문"
+                    used={usage.queries_total}
+                    limit={usage.unverified_query_limit}
+                    unit="개"
+                    refill="이메일을 확인하면 하루 200개로 늘어납니다."
+                  />
+                  <UsageBar
+                    label="지금까지 올린 문서"
+                    used={usage.documents_total}
+                    limit={usage.unverified_document_limit}
+                    unit="개"
+                    refill="이메일을 확인하면 한 달 1000쪽으로 늘어납니다."
+                  />
+                </>
+              )}
             </>
           )}
         </section>

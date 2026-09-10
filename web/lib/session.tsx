@@ -18,6 +18,8 @@ type SessionValue = {
   /** 아직 /auth/me 응답을 못 받은 상태. 이때 화면을 그리면 깜빡인다. */
   loading: boolean;
   setUser: (user: User | null) => void;
+  /** 서버 상태를 다시 읽는다. 인증을 마친 뒤 배너를 내리는 데 쓴다. */
+  refresh: () => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -46,6 +48,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const refresh = useCallback(async () => {
+    try {
+      setUser(await auth.me());
+    } catch {
+      /* 401이면 로그인하지 않은 것. 그 외 실패도 여기서는 같게 다룬다. */
+      setUser(null);
+    }
+  }, []);
+
   const signOut = useCallback(async () => {
     try {
       await auth.logout();
@@ -56,7 +67,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <SessionContext.Provider value={{ user, loading, setUser, signOut }}>
+    <SessionContext.Provider value={{ user, loading, setUser, refresh, signOut }}>
       {children}
     </SessionContext.Provider>
   );
