@@ -267,3 +267,119 @@ def test_email_body_carries_the_link_in_both_parts():
     assert subject
     assert "https://example.test/verify?token=x" in html
     assert "https://example.test/verify?token=x" in plain
+
+
+# --- 경쟁 조건: consume_token 은 원자적 클레임이어야 한다 ---
+
+
+def test_concurrent_consume_of_the_same_token_yields_exactly_one_ok():
+    """중복 제출·두 탭처럼 같은 토큰이 동시에 두 번 들어와도 승자는 하나다.
+
+    그냥 asyncio.gather 로 두 소비를 던지기만 하면, 로컬 Postgres 는 왕복이
+    워낙 빨라서 매번 우연히 순차 실행처럼 끝나버릴 수 있다 — 그러면 통과해도
+    진짜 경쟁을 검증한 게 아니라 운을 검증한 것이다. 그래서 세 번째
+    커넥션으로 토큰 행에 SELECT ... FOR UPDATE 락을 걸어 두 소비를 그 락
+    뒤에 정말로 묶어세우고(타임아웃 안에 끝나지 않았다는 것으로 "진짜
+    막혔다"까지 확인한 뒤), 락을 풀어 어느 쪽이 이길지는 Postgres 의 행
+    잠금 대기열에 맡긴다. 승자·패자는 매 실행마다 바뀔 수 있으므로 정렬한
+    쌍으로 비교한다.
+    """
+    from app.services import verification
+
+    async def scenario():
+        async with SessionLocal() as setup:
+            user = await _make_user(setup, f"race-{uuid.uuid4().hex}@example.com")
+            raw = await verification.issue_token(setup, user.id)
+
+        async with (
+            SessionLocal() as blocker,
+            SessionLocal() as session_a,
+            SessionLocal() as session_b,
+        ):
+            await blocker.execute(
+                text(
+                    "SELECT id FROM email_verification_tokens "
+                    "WHERE token_hash = :h FOR UPDATE"
+                ).bindparams(h=verification.hash_token(raw))
+            )
+
+            task_a = asyncio.create_task(verification.consume_token(session_a, raw))
+            task_b = asyncio.create_task(verification.consume_token(session_b, raw))
+
+            # 블로커가 락을 쥔 채로 이미 끝나버렸다면 이 테스트는 아무
+            # 경쟁도 만들지 못한 것이다 — 조용히 통과하는 대신 여기서 드러낸다.
+            done, _pending = await asyncio.wait({task_a, task_b}, timeout=0.3)
+            assert not done, "블로커가 행을 잠갔는데 소비가 먼저 끝났다"
+
+            await blocker.rollback()  # 아무것도 안 바꿨으니 롤백으로 락만 푼다
+
+            (result_a, user_a), (result_b, user_b) = await asyncio.gather(
+                task_a, task_b
+            )
+        return result_a, user_a, result_b, user_b
+
+    result_a, user_a, result_b, user_b = run_async(scenario)
+
+    assert sorted([result_a.value, result_b.value]) == sorted(["ok", "already"])
+
+    winner_user = user_a if result_a is verification.VerifyResult.OK else user_b
+    loser_user = user_b if result_a is verification.VerifyResult.OK else user_a
+    assert winner_user is not None and winner_user.email_verified is True
+    assert loser_user is None
+
+
+def test_a_consume_racing_a_reissue_returns_invalid_not_a_crash():
+    """오래된 링크를 클릭한 순간 같은 계정에 재발송이 겹치는 경우.
+
+    issue_token 은 미소비 토큰을 지운다. consume_token 이 그 행을 아직
+    처리하는 중에 재발급이 먼저 지우고 커밋해버리면, 이전 구현(SELECT 로
+    읽어 파이썬 객체로 들고 있다가 나중에 UPDATE)은 대상이 사라진 UPDATE 에
+    SQLAlchemy 가 StaleDataError 를 던져 죽었다 — "절대 예외를 던지지
+    않는다"는 이 모듈의 계약을 깨는 것이었다.
+
+    재발급(B)을 블로커의 락 대기열에 먼저 세운 뒤에 소비(A)를 걸어야 한다.
+    그래야 락을 풀었을 때 Postgres 가 대기열 순서대로 B 를 먼저 들여보내
+    "재발급이 먼저 지우고 커밋한 뒤에 소비가 그 사실을 본다"는 순서가
+    강제된다 — 반대로 A 가 먼저 이겨버리면 이 경쟁 자체가 일어나지 않는다.
+    """
+    from app.services import verification
+
+    async def scenario():
+        async with SessionLocal() as setup:
+            user = await _make_user(
+                setup, f"reissue-race-{uuid.uuid4().hex}@example.com"
+            )
+            raw = await verification.issue_token(setup, user.id)
+            user_id = user.id
+
+        async with (
+            SessionLocal() as blocker,
+            SessionLocal() as session_a,
+            SessionLocal() as session_b,
+        ):
+            await blocker.execute(
+                text(
+                    "SELECT id FROM email_verification_tokens "
+                    "WHERE user_id = :uid AND consumed_at IS NULL FOR UPDATE"
+                ).bindparams(uid=user_id)
+            )
+
+            # B(재발급)를 먼저 대기열에 세운다 — 락 해제 뒤 B 가 먼저
+            # 처리되게 해서 "재발급이 이긴다"는 순서를 강제하기 위해서다.
+            task_b = asyncio.create_task(verification.issue_token(session_b, user_id))
+            done, _pending = await asyncio.wait({task_b}, timeout=0.3)
+            assert not done, "재발급이 블로커 락을 기다리지 않고 먼저 끝났다"
+
+            task_a = asyncio.create_task(verification.consume_token(session_a, raw))
+            done, _pending = await asyncio.wait({task_a}, timeout=0.3)
+            assert not done, "소비가 블로커 락을 기다리지 않고 먼저 끝났다"
+
+            await blocker.rollback()  # 아무것도 안 바꿨으니 롤백으로 락만 푼다
+
+            _new_raw, (result, verified_user) = await asyncio.gather(task_b, task_a)
+        return result, verified_user
+
+    result, verified_user = run_async(scenario)
+
+    assert result is verification.VerifyResult.INVALID
+    assert verified_user is None
