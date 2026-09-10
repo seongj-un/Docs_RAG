@@ -66,3 +66,31 @@ def get_mailer() -> Mailer:
     if settings.mail_provider == "resend":
         logger.warning("MAIL_PROVIDER=resend 인데 RESEND_API_KEY 가 비어 콘솔로 보낸다")
     return ConsoleMailer()
+
+
+def _looks_local(url: str) -> bool:
+    return url.startswith(("http://localhost", "http://127.0.0.1"))
+
+
+def warn_if_base_url_looks_local() -> None:
+    """실제로 발송하면서 링크는 여전히 localhost 를 가리키는 배포를 잡는다.
+
+    ``MAIL_PROVIDER=resend`` 를 켰다는 것 자체가 "로컬에서 그냥 써본다"가
+    아니라는 신호다 — 콘솔 폴백이 있는데 굳이 키를 넣을 이유가 없다. 그런데
+    ``APP_BASE_URL`` 은 별도 설정이라 함께 바꾸는 것을 잊기 쉽고, 잊으면
+    모든 인증 메일이 배포 도메인이 아니라 발신자의 localhost 를 가리키는
+    죽은 링크로 나간다 — 가입자는 영원히 맛보기 한도에 갇히고, 재발송도
+    같은 죽은 링크를 다시 보낼 뿐이다. 아무도 이 상태를 알아채지 못한다:
+    발송 자체는 성공(200)하기 때문이다.
+
+    ``get_mailer()`` 와 같은 태도로 막지 않고 로그에 남긴다 — 여기서 앱을
+    못 띄우게 하면 설정 실수 하나가 배포 전체를 막는, 경고보다 비싼 실패가
+    된다.
+    """
+    if settings.mail_provider == "resend" and _looks_local(settings.app_base_url):
+        logger.warning(
+            "MAIL_PROVIDER=resend 인데 APP_BASE_URL=%s 다 — 인증 메일 링크가 "
+            "이 배포가 아니라 localhost 를 가리켜 모든 수신자에게 죽은 링크로 "
+            "간다. APP_BASE_URL 을 배포 도메인으로 바꿀 것.",
+            settings.app_base_url,
+        )

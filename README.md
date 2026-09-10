@@ -53,6 +53,8 @@ MPS 에서는 10.6초다(스레드를 늘려도 CPU 는 나아지지 않는다).
 | `SITE_ADDRESS` | `:80` | 도메인을 넣으면 Caddy가 인증서를 자동 발급 |
 | `ADMIN_TOKEN` | (빈 값) | 비우면 `/admin/stats`가 404 |
 | `MODEL_THREADS` | 4 | 모델 컨테이너의 CPU 스레드 |
+| `MAIL_PROVIDER` | `console` | 기본값인 `console`이면 가입 인증 메일이 서버 로그에만 찍히고 **아무에게도 발송되지 않는다.** 실제로 보내려면 `resend`로 바꾸고 `RESEND_API_KEY`를 채운다 |
+| `APP_BASE_URL` | `http://localhost:3000` | 인증 메일 링크가 이 값 뒤에 `/verify?token=…`을 붙여 조립된다. **배포 도메인으로 바꾸지 않으면 모든 가입자가 죽은 링크를 받는다** — 재발송도 같은 죽은 링크를 다시 보낼 뿐이다 |
 
 **모델 서비스는 CPU로 돈다.** macOS Docker는 리눅스 VM에서 돌고 Metal이
 전달되지 않아, 컨테이너는 이 맥의 GPU를 쓸 수 없다. NVIDIA 호스트라면

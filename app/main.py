@@ -14,10 +14,13 @@ from app.config import settings
 from app.routers import (
     admin, auth, chunks, conversations, documents, query, traces, usage,
 )
+from app.services import mailer
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 요청마다가 아니라 프로세스당 한 번 — 설정은 기동 중에 바뀌지 않는다.
+    mailer.warn_if_base_url_looks_local()
     await run_migrations()
     yield
 

@@ -46,6 +46,44 @@ def test_console_mailer_logs_the_link(caplog):
     assert "https://example.test/verify?token=abc" in logged
 
 
+def test_warns_when_resend_is_live_but_the_link_still_points_at_localhost(caplog):
+    """이 조합이면 발송은 200으로 성공하면서 모든 수신자가 죽은 링크를 받는다."""
+    original_provider, original_base_url = settings.mail_provider, settings.app_base_url
+    try:
+        settings.mail_provider = "resend"
+        settings.app_base_url = "http://localhost:3000"
+        with caplog.at_level("WARNING"):
+            mailer.warn_if_base_url_looks_local()
+        assert "APP_BASE_URL" in caplog.text
+    finally:
+        settings.mail_provider, settings.app_base_url = original_provider, original_base_url
+
+
+def test_does_not_warn_once_app_base_url_is_a_real_domain(caplog):
+    original_provider, original_base_url = settings.mail_provider, settings.app_base_url
+    try:
+        settings.mail_provider = "resend"
+        settings.app_base_url = "https://docs-rag.example.com"
+        with caplog.at_level("WARNING"):
+            mailer.warn_if_base_url_looks_local()
+        assert caplog.records == []
+    finally:
+        settings.mail_provider, settings.app_base_url = original_provider, original_base_url
+
+
+def test_does_not_warn_in_the_default_local_dev_configuration(caplog):
+    """가장 흔한 상태(둘 다 기본값)에서 매 기동마다 경고가 찍히면 안 된다."""
+    original_provider, original_base_url = settings.mail_provider, settings.app_base_url
+    try:
+        settings.mail_provider = "console"
+        settings.app_base_url = "http://localhost:3000"
+        with caplog.at_level("WARNING"):
+            mailer.warn_if_base_url_looks_local()
+        assert caplog.records == []
+    finally:
+        settings.mail_provider, settings.app_base_url = original_provider, original_base_url
+
+
 def test_resend_posts_the_expected_payload(monkeypatch):
     """계약을 고정한다. 필드 이름이 틀리면 조용히 안 보내진다."""
     captured: dict = {}
