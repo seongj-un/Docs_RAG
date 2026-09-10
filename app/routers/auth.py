@@ -158,9 +158,17 @@ async def logout(
 @router.post("/verify", response_model=UserOut)
 async def verify(
     body: VerifyRequest,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> User:
-    """세션을 요구하지 않는다 — 메일 링크는 다른 브라우저에서 열린다."""
+    """세션을 요구하지 않는다 — 메일 링크는 다른 브라우저에서 열린다.
+
+    인증되지 않은 채로 DB 조회 한 번을 공짜로 태울 수 있는 경로라
+    signup/login 과 같은 문 앞 게이트를 세운다. 토큰이 256비트라 추측
+    방어가 목적이 아니라, 무제한으로 두드릴 수 있는 자원 소모 방어다.
+    이메일이 없으니 IP 버킷만 쓴다.
+    """
+    _guard_attempts(request)
     result, user = await verification.consume_token(session, body.token)
 
     if result is verification.VerifyResult.ALREADY:

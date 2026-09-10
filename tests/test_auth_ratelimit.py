@@ -143,6 +143,51 @@ def test_signup_is_throttled_too():
 
 
 @needs_db
+def test_verify_is_throttled_too():
+    """/auth/verify needs no session and does a DB lookup per call — before
+    this it was the one credential-adjacent route with no ceiling at all.
+    Bogus tokens are enough: the guard must fire regardless of what the
+    token turns out to be, so this never needs a real signup or a real link.
+    """
+    limit = settings.rate_limit_auth_per_min
+    payloads = [{"token": f"not-a-real-token-{i}"} for i in range(limit + 2)]
+    codes = _attempts(payloads, path="/auth/verify")
+    assert codes[0] == 400, codes[:3]  # bogus token, not yet throttled
+    assert 429 in codes, codes
+    assert codes[-1] == 429, codes[-3:]
+
+
+@needs_db
+def test_verify_throttle_is_per_address_not_shared_with_login():
+    """The IP bucket is shared across auth routes by design (one `auth_limiter`),
+    so hammering /auth/verify must count toward the same ceiling as /auth/login
+    from that address — otherwise an attacker just picks whichever route is
+    still open.
+    """
+    limit = settings.rate_limit_auth_per_min
+    async def scenario():
+        try:
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as c:
+                codes = []
+                for i in range(limit):
+                    r = await c.post("/auth/verify", json={"token": f"t-{i}"})
+                    codes.append(r.status_code)
+                last = await c.post(
+                    "/auth/login",
+                    json={"email": "nobody@example.com", "password": "x"},
+                )
+                codes.append(last.status_code)
+                return codes
+        finally:
+            await engine.dispose()
+
+    codes = asyncio.run(scenario())
+    assert codes[-1] == 429, codes
+
+
+@needs_db
 def test_the_limit_is_checked_before_hashing():
     """argon2 is deliberately slow; paying that for an attacker is the DoS.
 
