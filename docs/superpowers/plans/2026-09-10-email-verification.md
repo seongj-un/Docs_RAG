@@ -1134,7 +1134,7 @@ class UserOut(BaseModel):
 
 - [ ] **Step 4: 리미터 추가**
 
-`app/services/ratelimit.py` 맨 끝에 붙인다.
+`app/services/ratelimit.py` 맨 끝에 붙인다. 그리고 `tests/conftest.py` 의 `fresh_rate_limits` 튜플에도 새 리미터를 추가한다 — 버킷은 프로세스 안에 살아 테스트 사이를 넘어가고, 분당 1통 제한이라 리셋하지 않으면 두 번째 테스트부터 재발송이 이미 429 다.
 
 ```python
 # 인증 메일 재발송. 세션이 필요하므로 남의 메일함은 채울 수 없지만, Resend
