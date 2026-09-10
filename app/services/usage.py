@@ -51,6 +51,61 @@ async def pages_this_month(session: AsyncSession, user_id: uuid.UUID) -> int:
     return int(result.scalar_one())
 
 
+async def queries_total(session: AsyncSession, user_id: uuid.UUID) -> int:
+    """계정 수명 전체의 질의 수. 시간 창이 없는 것이 요점이다."""
+    result = await session.execute(
+        select(func.count(UsageEvent.id)).where(
+            UsageEvent.user_id == user_id,
+            UsageEvent.kind == "query",
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def documents_total(session: AsyncSession, user_id: uuid.UUID) -> int:
+    """지금까지 **수락된** 업로드 수.
+
+    ``documents`` 를 세지 않는다. ``UsageEvent`` 의 외래키는 ``documents``
+    가 아니라 ``users`` 를 향하므로 문서를 지워도 행이 남고, 올렸다 지워서
+    한도를 되돌리는 우회가 구조적으로 막힌다.
+
+    ``ingest`` 도 세지 않는다. 그 행은 백그라운드 인덱싱이 성공한 뒤에야
+    생겨서, 색인이 끝나기 전에 연달아 던진 업로드는 카운터가 0인 채로 전부
+    통과하고 실패한 업로드는 아예 세어지지 않는다. ``upload`` 는 업로드를
+    수락하는 그 요청 안에서 기록된다.
+    """
+    result = await session.execute(
+        select(func.count(UsageEvent.id)).where(
+            UsageEvent.user_id == user_id,
+            UsageEvent.kind == "upload",
+        )
+    )
+    return int(result.scalar_one())
+
+
+async def unverified_query_exceeded(
+    session: AsyncSession, user_id: uuid.UUID
+) -> bool:
+    """미인증 계정의 맛보기 질의 한도를 넘겼는지. 0 이면 게이트를 끈다.
+
+    호출자가 인증 여부를 먼저 확인한다 — 이 함수는 세기만 한다.
+    """
+    if settings.unverified_quota_queries <= 0:
+        return False
+    return await queries_total(session, user_id) >= settings.unverified_quota_queries
+
+
+async def unverified_upload_exceeded(
+    session: AsyncSession, user_id: uuid.UUID
+) -> bool:
+    if settings.unverified_quota_documents <= 0:
+        return False
+    return (
+        await documents_total(session, user_id)
+        >= settings.unverified_quota_documents
+    )
+
+
 async def query_quota_exceeded(session: AsyncSession, user_id: uuid.UUID) -> bool:
     if settings.quota_queries_per_day <= 0:
         return False

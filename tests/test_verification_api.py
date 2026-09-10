@@ -7,9 +7,13 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
+from app.config import settings
 from app.db import SessionLocal, engine
 from app.main import app
 from app.services import verification
+from app.services.ratelimit import auth_limiter, upload_limiter, verify_resend_limiter
+
+BROKEN_PDF = b"%PDF-1.4 not actually a pdf"
 
 
 def run_async(coro_fn):
@@ -184,3 +188,89 @@ def test_resend_to_a_verified_account_is_a_409():
 
     assert response.status_code == 409
     assert response.json()["detail"] == "email already verified"
+
+
+def test_the_sixth_question_is_refused_until_verified():
+    """맛보기를 다 쓰면 429 가 아니라 403 이어야 한다 — 기다려도 안 풀린다."""
+    from app.services import usage
+
+    async def scenario():
+        async with await _client() as client:
+            email, body = await _signup(client)
+            user_id = uuid.UUID(body["id"])
+
+            async with SessionLocal() as session:
+                for _ in range(settings.unverified_quota_queries):
+                    await usage.record(session, user_id, "query")
+
+            response = await client.post(
+                "/query", json={"question": "맛보기를 다 쓴 뒤의 질문"}
+            )
+        return response
+
+    response = run_async(scenario)
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "email verification required"
+
+
+def test_verifying_restores_the_normal_quota():
+    from app.services import usage
+
+    async def scenario():
+        async with await _client() as client:
+            email, body = await _signup(client)
+            user_id = uuid.UUID(body["id"])
+
+            async with SessionLocal() as session:
+                for _ in range(settings.unverified_quota_queries):
+                    await usage.record(session, user_id, "query")
+
+            token = await _token_for(email)
+            await client.post("/auth/verify", json={"token": token})
+
+            response = await client.post(
+                "/query", json={"question": "인증한 뒤의 질문"}
+            )
+        return response
+
+    response = run_async(scenario)
+
+    # 403 만 아니면 된다. 임베딩 서버가 없으면 503 이 정상이고, 그건 게이트
+    # 가 열렸다는 뜻이다.
+    assert response.status_code != 403
+
+
+def test_the_second_upload_is_refused_and_deleting_does_not_reopen_it():
+    """지우기로 한도가 초기화되면 무제한 임베딩이 공짜가 된다."""
+    upload_limiter.reset()
+
+    async def scenario():
+        async with await _client() as client:
+            await _signup(client)
+
+            first = await client.post(
+                "/documents",
+                files={"file": ("one.pdf", BROKEN_PDF, "application/pdf")},
+            )
+            assert first.status_code == 202, first.text
+            doc_id = first.json()["id"]
+
+            second = await client.post(
+                "/documents",
+                files={"file": ("two.pdf", BROKEN_PDF, "application/pdf")},
+            )
+            assert second.status_code == 403
+            assert second.json()["detail"] == "email verification required"
+
+            assert (await client.delete(f"/documents/{doc_id}")).status_code == 204
+
+            third = await client.post(
+                "/documents",
+                files={"file": ("three.pdf", BROKEN_PDF, "application/pdf")},
+            )
+        return third
+
+    third = run_async(scenario)
+
+    assert third.status_code == 403, "문서를 지우자 한도가 초기화됐다"

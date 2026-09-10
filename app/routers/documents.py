@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db import get_session
-from app.deps import get_current_user
+from app.deps import VERIFICATION_REQUIRED, get_current_user
 from app.models import Document, User
 from app.schemas import DocumentCreated, DocumentStatus
 from app.services import cache, ingest
@@ -88,6 +88,13 @@ async def upload_document(
             headers={"Retry-After": "60"},
         )
 
+    # 인증 여부는 파일을 읽기 전에 본다 — 거절할 업로드에 50MB 를 읽을
+    # 이유가 없다.
+    if not user.email_verified and await ingest.usage.unverified_upload_exceeded(
+        session, user.id
+    ):
+        raise VERIFICATION_REQUIRED
+
     # Guards run before the row is created, so rejected uploads cost nothing
     # and leave no half-state behind.
     data = await file.read()
@@ -120,6 +127,11 @@ async def upload_document(
     session.add(doc)
     await session.commit()
     await session.refresh(doc)
+
+    # 수락 시점에 남긴다. 색인 성공 시 기록되는 ``ingest`` 와 다른 사건이다:
+    # 그쪽은 백그라운드가 끝나야 생겨서, 색인 전에 연달아 던진 업로드가
+    # 카운터를 0으로 본 채 전부 통과하고 실패한 업로드는 세어지지도 않는다.
+    await ingest.usage.record(session, user.id, "upload")
 
     path = _storage_path(doc.id, doc.filename)
     with open(path, "wb") as fh:

@@ -20,6 +20,13 @@ _UNAUTHENTICATED = HTTPException(
     status_code=status.HTTP_401_UNAUTHORIZED, detail="authentication required"
 )
 
+# 403 이고 429 가 아닌 이유: 기다린다고 풀리지 않는다. 사용자가 메일의
+# 링크를 눌러야 한다. 429 로 두면 프론트가 "잠시 뒤에 다시"라는 틀린
+# 조언을 하게 된다.
+VERIFICATION_REQUIRED = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN, detail="email verification required"
+)
+
 
 async def get_current_user(
     session_id: str | None = Cookie(default=None, alias=settings.session_cookie_name),

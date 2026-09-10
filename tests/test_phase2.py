@@ -105,7 +105,13 @@ def test_quota_exceeded_returns_429(monkeypatch):
             user_id = uuid.UUID((await client.get("/auth/me")).json()["id"])
 
             async with SessionLocal() as session:
-                from app.services import usage
+                from app.services import usage, verification
+
+                # 이 한도는 인증된 계정의 것이다. 미인증 상태로 두면 이보다
+                # 먼저 걸리는 맛보기 게이트(unverified_quota_queries)를 보게
+                # 되어 이 테스트가 검사하려는 429 대신 다른 경로를 탄다.
+                token = await verification.issue_token(session, user_id)
+                await verification.consume_token(session, token)
 
                 for _ in range(2):  # exactly the daily allowance
                     await usage.record(session, user_id, "query")

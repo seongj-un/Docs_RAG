@@ -39,7 +39,12 @@ async def collect(days: int) -> dict:
                     func.coalesce(func.sum(UsageEvent.tokens_in), 0),
                     func.coalesce(func.sum(UsageEvent.tokens_out), 0),
                     func.coalesce(func.sum(UsageEvent.pages), 0),
-                ).where(UsageEvent.created_at >= since)
+                ).where(
+                    UsageEvent.created_at >= since,
+                    # 업로드 수락은 비용이 0 이다. 세면 "요청 N건"과
+                    # 캐시 적중률이 함께 왜곡된다.
+                    UsageEvent.kind != "upload",
+                )
             )
         ).one()
         by_user = (

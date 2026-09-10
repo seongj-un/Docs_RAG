@@ -21,6 +21,7 @@ from pgvector import SparseVector
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.deps import VERIFICATION_REQUIRED
 from app.models import User
 from app.services import cache, embeddings, ingest, rerank, retrieve, tracing, usage
 from app.services.upstream import UpstreamUnavailable
@@ -108,7 +109,12 @@ class QueryRunner:
             f"ip:{client_ip}"
         ):
             raise too_many("query rate limit exceeded")
-        if await usage.query_quota_exceeded(self.session, self.user.id):
+        # 미인증 계정은 다른 한도를 다른 창으로 센다 — 하루가 아니라 계정
+        # 수명 전체. 그래야 재가입으로 초기화되지 않는다.
+        if not self.user.email_verified:
+            if await usage.unverified_query_exceeded(self.session, self.user.id):
+                raise VERIFICATION_REQUIRED
+        elif await usage.query_quota_exceeded(self.session, self.user.id):
             raise too_many("daily query quota exceeded")
 
     async def resolve_scope(self) -> None:
