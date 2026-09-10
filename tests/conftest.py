@@ -19,7 +19,12 @@ import pytest
 from sqlalchemy import text
 
 from app.config import settings
-from app.services.ratelimit import auth_limiter, query_limiter, upload_limiter
+from app.services.ratelimit import (
+    auth_limiter,
+    query_limiter,
+    upload_limiter,
+    verify_resend_limiter,
+)
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -105,6 +110,6 @@ def fresh_rate_limits():
     전에 비우는 것은 그쪽에도 안전하다 — 오히려 앞 테스트가 남긴 소비량에
     좌우되지 않게 해준다.
     """
-    for limiter in (query_limiter, upload_limiter, auth_limiter):
+    for limiter in (query_limiter, upload_limiter, auth_limiter, verify_resend_limiter):
         limiter.reset()
     yield

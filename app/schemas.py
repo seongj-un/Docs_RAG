@@ -17,11 +17,19 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1, max_length=256)
 
 
+class VerifyRequest(BaseModel):
+    # 링크에서 온 토큰. GET 이 아니라 본문으로 받는 이유는 메일 스캐너가
+    # 링크를 미리 밟아 1회용 토큰을 태우기 때문이다.
+    token: str = Field(..., min_length=1, max_length=512)
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     email: str
+    # User.email_verified 프로퍼티에서 읽어온다.
+    email_verified: bool = False
     created_at: datetime | None = None
 
 

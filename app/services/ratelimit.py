@@ -65,3 +65,6 @@ query_limiter = TokenBucketLimiter(settings.rate_limit_query_per_min)
 upload_limiter = TokenBucketLimiter(settings.rate_limit_upload_per_min)
 # 인증 시도는 비용이 아니라 추측을 막는 것이 목적이라 예산이 따로다.
 auth_limiter = TokenBucketLimiter(settings.rate_limit_auth_per_min)
+# 인증 메일 재발송. 세션이 필요하므로 남의 메일함은 채울 수 없지만, Resend
+# 무료 한도가 하루 100통이라 자기 계정으로 그걸 태울 수는 있다.
+verify_resend_limiter = TokenBucketLimiter(settings.rate_limit_verify_resend_per_min)
