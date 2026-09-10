@@ -16,6 +16,11 @@
 {$SITE_ADDRESS} {
 	encode zstd gzip
 
+	# 공개 호스트에서 사고 대응(누가·언제·무엇을) 때 쓸 접근 로그. 인자 없는
+	# log 는 stderr 로 나가므로 `docker compose logs proxy` 로 그대로 보인다
+	# — 별도 파일·로테이션 설정 없이 최소한의 관측성을 얻는다.
+	log
+
 	# handle_path 는 매칭된 접두사를 떼고 넘긴다: /api/auth/me -> /auth/me.
 	# 그래서 백엔드는 자기가 하위 경로에 붙어 있다는 사실을 몰라도 된다.
 	handle_path /api/* {
