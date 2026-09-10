@@ -1,6 +1,7 @@
 """이메일 인증 토큰의 수명. Postgres 가 필요하다."""
 
 import asyncio
+import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -127,6 +128,12 @@ def test_raw_token_is_never_stored():
 
     raw, stored = run_async(scenario)
 
+    # verification.hash_token(raw) 하고만 비교하면 sha256 을 다른 다이제스트로
+    # 바꿔도 자기 자신과는 항상 일치해 초록불이 뜬다 — 그러면 배포된 순간
+    # 이미 발급된 인증 링크가 전부 조용히 무효화되는 변경도 이 테스트를
+    # 통과한다. 알고리즘 자체를 고정하려면 그 함수를 거치지 않고 독립적으로
+    # 계산해야 한다.
+    assert stored == [hashlib.sha256(raw.encode("utf-8")).hexdigest()]
     assert stored == [verification.hash_token(raw)]
     assert raw not in stored
 
