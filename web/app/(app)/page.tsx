@@ -50,6 +50,14 @@ function localMessage(
   };
 }
 
+/* 이메일 인증 게이트(403)는 기다려서도, 다시 눌러서도 풀리지 않는다 —
+ * 사용자가 메일의 링크를 눌러야 하고 그 버튼은 화면 위 배너에 있다. */
+function isRetryFutile(cause: unknown): boolean {
+  return (
+    cause instanceof ApiError && cause.detail === "email verification required"
+  );
+}
+
 export default function ChatPage() {
   /* useSearchParams는 Suspense 경계를 요구한다 (Next 16). */
   return (
@@ -69,6 +77,9 @@ function Chat() {
   /** 스트리밍 중 쌓이는 글자. null이면 진행 중인 턴이 없다. */
   const [streaming, setStreaming] = useState<string | null>(null);
   const [turnError, setTurnError] = useState<ErrorCopy | null>(null);
+  /* 같은 질문을 다시 보내도 반드시 같은 결과인 실패가 있다. 그때
+   * '다시 시도' 버튼을 주면 사용자를 확실히 실패하는 길로 보낸다. */
+  const [retryIsFutile, setRetryIsFutile] = useState(false);
   /** 실패한 질문. 재시도 버튼이 이걸 다시 보낸다. */
   const [lastQuestion, setLastQuestion] = useState<string | null>(null);
   /* 문서 상세의 "이 문서에 질문하기"가 범위를 들고 온다. 효과로 맞추지 않고
@@ -100,6 +111,7 @@ function Chat() {
     setMessages([]);
     setStreaming(null);
     setTurnError(null);
+    setRetryIsFutile(false);
     try {
       const detail = await api.getConversation(id);
       /* 응답이 기대한 모양이 아니어도 화면이 죽지는 않게 한다. */
@@ -121,6 +133,7 @@ function Chat() {
         });
       } else {
         setTurnError(describeError(cause));
+        setRetryIsFutile(isRetryFutile(cause));
       }
     }
   }, []);
@@ -130,6 +143,7 @@ function Chat() {
     setMessages([]);
     setStreaming(null);
     setTurnError(null);
+    setRetryIsFutile(false);
     setLastQuestion(null);
   }
 
@@ -153,6 +167,7 @@ function Chat() {
   const ask = useCallback(
     async (question: string) => {
       setTurnError(null);
+      setRetryIsFutile(false);
       setLastQuestion(question);
       setMessages((current) => [...current, localMessage("user", question)]);
       setStreaming("");
@@ -196,7 +211,9 @@ function Chat() {
             setStreaming(null);
             /* 스트림이 열린 뒤의 실패는 상태 코드가 아니라 사건으로 온다.
              * 문구 고르는 규칙은 같으므로 같은 ApiError로 되돌린다. */
-            setTurnError(describeError(new ApiError(event.status, event.detail)));
+            const failure = new ApiError(event.status, event.detail);
+            setTurnError(describeError(failure));
+            setRetryIsFutile(isRetryFutile(failure));
           }
         }
 
@@ -211,6 +228,7 @@ function Chat() {
       } catch (cause) {
         setStreaming(null);
         setTurnError(describeError(cause));
+        setRetryIsFutile(isRetryFutile(cause));
       } finally {
         /* 첫 질문이 제목을 만든다. 사이드바에 반영하려면 다시 읽어야 한다. */
         void refreshConversations();
@@ -279,8 +297,13 @@ function Chat() {
                   actions={
                     /* 질문하다 실패했으면 그 질문을 다시 보내면 된다.
                        대화를 여는 데 실패한 것이라면 다시 시도해도 같은
-                       결과이므로, 나갈 길을 준다. */
-                    lastQuestion ? (
+                       결과이므로, 나갈 길을 준다.
+                       이메일 인증에 막힌 경우는 둘 다 아니다 — 다시 보내도
+                       반드시 또 막히고, 새 대화를 열어도 마찬가지다. 해야 할
+                       일은 메일의 링크를 누르는 것이고 그 버튼(다시 보내기)은
+                       이 화면 위 배너에 이미 있다. 그래서 여기서는 버튼을
+                       주지 않는다 — 반드시 실패하는 길로 보내느니 낫다. */
+                    retryIsFutile ? undefined : lastQuestion ? (
                       <Button onClick={() => void ask(lastQuestion)}>
                         다시 시도
                       </Button>
