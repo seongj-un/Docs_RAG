@@ -31,4 +31,9 @@ async def get_usage(
         queries_per_day=settings.quota_queries_per_day,
         pages_this_month=await usage_service.pages_this_month(session, user.id),
         pages_per_month=settings.quota_upload_pages_per_month,
+        email_verified=user.email_verified,
+        queries_total=await usage_service.queries_total(session, user.id),
+        documents_total=await usage_service.documents_total(session, user.id),
+        unverified_query_limit=settings.unverified_quota_queries,
+        unverified_document_limit=settings.unverified_quota_documents,
     )

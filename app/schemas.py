@@ -98,12 +98,22 @@ class UsageOut(BaseModel):
 
     Both halves are returned so the caller can phrase the remainder itself
     ("82쪽 남았습니다") instead of receiving a percentage it cannot explain.
+
+    미인증 계정은 다른 한도를 **다른 창**으로 센다(수명 전체 누적). 숫자만
+    바꿔서는 안 되는 이유가 여기 있다 — 화면의 "내일 다시 채워집니다"가
+    거짓이 된다. ``email_verified`` 를 함께 주어 문구까지 바꾸게 한다.
     """
 
     queries_today: int
     queries_per_day: int
     pages_this_month: int
     pages_per_month: int
+
+    email_verified: bool
+    queries_total: int
+    documents_total: int
+    unverified_query_limit: int
+    unverified_document_limit: int
 
 
 class ConversationCreate(BaseModel):
