@@ -30,6 +30,13 @@ DETAIL_MAPPED = {
     "monthly upload page quota exceeded",
     "email already registered",
     "invalid email or password",
+    # 이메일 인증. 403 은 기다려서 풀리지 않고(사용자가 링크를 눌러야 한다),
+    # 400 과 409 는 둘 다 "링크가 안 된다"지만 다음 행동이 다르다 — 하나는
+    # 새 링크를 받아야 하고 다른 하나는 할 일이 없다.
+    "email verification required",
+    "invalid or expired token",
+    "email already verified",
+    "verification email rate limit exceeded",
     "search unavailable",
     "model quota exceeded",
     "model unavailable",
