@@ -30,7 +30,17 @@ class Settings(BaseSettings):
     hybrid_enabled: bool = True
     rerank_url: str = "http://localhost:8081"  # bge-reranker-v2-m3 (TEI)
     rrf_k: int = 60          # RRF constant
-    cand_k: int = 50         # candidates per retriever (dense top-N, sparse top-N)
+    # Candidates each retriever (dense, sparse) contributes before RRF fusion
+    # and reranking. `python -m eval.candk_sweep` on eval/corpora/wide.py (260
+    # pages, built specifically so this cutoff binds) found R@1 held at 1.000
+    # all the way from 50 down to 5, while reranking time fell 1226ms ->
+    # 135ms (9.1x) — candidate count is what reranking time is most sensitive
+    # to. Shipped 20, not 5: 5 leaves only ~1.7x headroom over the worst rank
+    # the gold chunk fell to in that sweep, 20 leaves ~6.7x and still roughly
+    # halves reranking time versus the old default of 50. Headroom shrinks as
+    # a corpus grows, and the measurement corpus was smaller than a
+    # production one would be — so the conservative number is what ships.
+    cand_k: int = 20         # candidates per retriever (dense top-N, sparse top-N)
     # Context size after reranking. Was 8; the M4 golden-set evaluation measured
     # context_precision 0.246 at that size (7 of 8 chunks typically irrelevant)
     # while R@3 was 1.000 — the needed page was always within the top 3, so the

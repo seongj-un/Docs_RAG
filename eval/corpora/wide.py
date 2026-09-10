@@ -1,10 +1,15 @@
 """A corpus larger than CAND_K, so the candidate cut-off actually binds.
 
 ``CAND_K`` limits how many chunks each retriever hands to fusion, and fusion
-hands to the reranker. Every other corpus here is *smaller* than the default
-50 — 12, 36, 40 chunks — so all of them are always retrieved and the setting
-does nothing. (The D19 note already flagged this: "코퍼스(40)가 CAND_K(50)보다
-작아 융합 단계 영향은 미측정".) Sweeping CAND_K on those measures nothing.
+hands to the reranker. Every other corpus here maxes out at 40 chunks (12,
+36, 40). Under the old default of 50 all of them stayed under that cap, so
+every chunk was always a candidate and the setting did nothing to them.
+Under the current default of 20, `hard`'s 40 chunks no longer stay under it
+either — but 40 is still nowhere near this corpus's 260, so `hard` only
+touches the bottom of the range this project sweeps (5-100) instead of
+giving the cutoff real room to bind, which is what this corpus is for. (The
+D19 note already flagged the old gap, at 50: "코퍼스(40)가 CAND_K(50)보다
+작아 융합 단계 영향은 미측정".)
 
 This corpus is 260 pages: five families of near-identical clauses that differ
 only in a number, plus distinct-topic clauses. Within a family a bi-encoder has

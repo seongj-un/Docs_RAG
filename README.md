@@ -224,7 +224,7 @@ per-IP rate limit이 `request.client.host`를 쓴다. 프록시를 붙이면 그
 | `LLM_MODEL` | `gemini-3.6-flash` | 생성 모델. **무료 티어라면 `gemini-3.1-flash-lite` 로 바꿀 것** — 아래 참조 |
 | `EVAL_LLM_MODEL` | `gemini-3.1-flash-lite` | 평가용. 무료 티어가 `3.6-flash`는 **하루 20회**라 분리했다 |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | 700 / 100 | 토큰 단위 |
-| `CAND_K` | 50 | 리랭커에 넘길 후보 수 (아래 평가 참조) |
+| `CAND_K` | 20 | 리랭커에 넘길 후보 수 (아래 평가 참조) |
 | `RERANK_TOP` | 3 | 생성에 넘길 청크 수 |
 | `RERANK_MIN_SCORE` | 0.005 | 리랭커 점수 하한. **`MIN_SCORE`와 다른 값이다** |
 | `RERANK_MAX_CHARS` | 0 (끔) | 리랭커 입력 자르기. 측정 결과 켜면 안 된다 |
@@ -312,8 +312,11 @@ python -m eval.rerank_truncation --corpus hard       # 음성 대조군
 ```bash
 python -m eval.candk_sweep --corpus wide   # 260쪽, CAND_K가 실제로 물림
 ```
-`wide`도 이 실험용이다 — 다른 코퍼스는 전부 `CAND_K`(50)보다 작아 전 청크가
-항상 후보가 되므로 이 설정이 아무 일도 하지 않는다.
+`wide`도 이 실험용이다 — 다른 코퍼스는 전부 40쪽 이하다. 예전 기본값 50에서는
+그 아래였으니 전 청크가 항상 후보가 되어 이 설정이 아무 일도 하지 않았다.
+지금 기본값 20에서는 `hard`(40쪽)만 그 위로 올라가지만, 260쪽인 `wide`에
+비하면 미미해서 스윕 범위(5~100) 하단만 살짝 건드릴 뿐 이 설정이 실제로
+잘라내는 효과는 보여주지 못한다.
 
 읽는 법: **후보 적중률이 R@1의 천장이다.** 후보에 없으면 리랭커가 복구할 수
 없다. 실제로 이 설정을 좌우하는 값은 두 채널 중 좋은 쪽의 순위
