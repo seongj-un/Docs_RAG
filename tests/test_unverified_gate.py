@@ -162,6 +162,85 @@ def test_a_verified_account_is_not_gated():
     run_async(scenario)
 
 
+def test_first_upload_over_the_page_allowance_is_refused():
+    """문서 개수 게이트는 이력만 보므로 첫 업로드는 그냥 통과시킨다(0 < 1).
+
+    비용은 문서 수가 아니라 쪽수에 비례하니, 쪽수 게이트는 이력이 없어도
+    파일 자체가 크면 첫 업로드부터 막을 수 있어야 한다 — 그게 문서 게이트
+    와 모양이 다른 이유다.
+    """
+
+    async def scenario():
+        async with SessionLocal() as session:
+            user = await _fresh_user(session, verified=False)
+            over_limit = settings.unverified_quota_pages + 1
+
+            # 문서 게이트는 이 첫 업로드를 막지 않는다 — 바로 이 사각지대가
+            # 문제였다.
+            assert await usage.unverified_upload_exceeded(session, user.id) is False
+            assert (
+                await usage.unverified_pages_exceeded(session, user.id, over_limit)
+                is True
+            )
+
+    run_async(scenario)
+
+
+def test_a_page_allowance_exactly_at_the_limit_is_not_refused():
+    """경계값: 한도와 같으면 아직 넘은 것이 아니다(> 이지 >= 가 아니다)."""
+
+    async def scenario():
+        async with SessionLocal() as session:
+            user = await _fresh_user(session, verified=False)
+
+            assert (
+                await usage.unverified_pages_exceeded(
+                    session, user.id, settings.unverified_quota_pages
+                )
+                is False
+            )
+
+    run_async(scenario)
+
+
+def test_a_verified_account_is_not_page_gated():
+    async def scenario():
+        async with SessionLocal() as session:
+            user = await _fresh_user(session, verified=True)
+            over_unverified_limit = settings.unverified_quota_pages + 1
+
+            assert user.email_verified is True
+            # 게이트 함수 자체는 인증 여부를 묻지 않는다 — 라우터가 인증
+            # 계정에는 애초에 이 함수를 부르지 않는다. 여기서 확인하는 것은
+            # 정상 쪽수 쿼터(훨씬 큰 한도)가 같은 값으로는 안 걸린다는 것.
+            assert (
+                await usage.upload_quota_exceeded(
+                    session, user.id, over_unverified_limit
+                )
+                is False
+            )
+
+    run_async(scenario)
+
+
+def test_zero_disables_the_page_gate():
+    original = settings.unverified_quota_pages
+    try:
+        settings.unverified_quota_pages = 0
+
+        async def scenario():
+            async with SessionLocal() as session:
+                user = await _fresh_user(session, verified=False)
+                assert (
+                    await usage.unverified_pages_exceeded(session, user.id, 10_000)
+                    is False
+                )
+
+        run_async(scenario)
+    finally:
+        settings.unverified_quota_pages = original
+
+
 def test_zero_disables_the_gate():
     original = settings.unverified_quota_queries
     try:

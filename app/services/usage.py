@@ -83,6 +83,22 @@ async def documents_total(session: AsyncSession, user_id: uuid.UUID) -> int:
     return int(result.scalar_one())
 
 
+async def pages_uploaded_total(session: AsyncSession, user_id: uuid.UUID) -> int:
+    """계정 수명 전체에 걸쳐 **수락된** 업로드의 누적 쪽수.
+
+    ``documents_total`` 과 같은 이유로 ``ingest`` 가 아니라 ``upload`` 를
+    센다 — ``ingest`` 는 색인이 성공한 뒤에야 생겨서, 색인이 끝나기 전에
+    연달아 던진 업로드는 전부 0쪽으로 보이고 실패한 업로드는 아예 빠진다.
+    """
+    result = await session.execute(
+        select(func.coalesce(func.sum(UsageEvent.pages), 0)).where(
+            UsageEvent.user_id == user_id,
+            UsageEvent.kind == "upload",
+        )
+    )
+    return int(result.scalar_one())
+
+
 async def unverified_query_exceeded(
     session: AsyncSession, user_id: uuid.UUID
 ) -> bool:
@@ -104,6 +120,22 @@ async def unverified_upload_exceeded(
         await documents_total(session, user_id)
         >= settings.unverified_quota_documents
     )
+
+
+async def unverified_pages_exceeded(
+    session: AsyncSession, user_id: uuid.UUID, incoming_pages: int = 0
+) -> bool:
+    """미인증 계정의 맛보기 쪽수 한도를 이 업로드가 넘기는지.
+
+    ``unverified_upload_exceeded`` 와 달리 이력만으로는 판단할 수 없다 —
+    첫 업로드 자체가 500쪽이면 이력이 0이어도 그 한 번으로 한도를 넘겨야
+    한다. ``upload_quota_exceeded`` 와 같은 모양(이력 + 들어오는 쪽수)인
+    이유가 그것이다.
+    """
+    if settings.unverified_quota_pages <= 0:
+        return False
+    used = await pages_uploaded_total(session, user_id)
+    return used + incoming_pages > settings.unverified_quota_pages
 
 
 async def query_quota_exceeded(session: AsyncSession, user_id: uuid.UUID) -> bool:

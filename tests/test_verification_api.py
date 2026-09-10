@@ -3,6 +3,7 @@
 import asyncio
 import uuid
 
+import pymupdf
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
@@ -14,6 +15,29 @@ from app.services import verification
 from app.services.ratelimit import auth_limiter, upload_limiter, verify_resend_limiter
 
 BROKEN_PDF = b"%PDF-1.4 not actually a pdf"
+
+
+def _multi_page_pdf(num_pages: int) -> bytes:
+    """실제로 파싱되는 여러 쪽 PDF.
+
+    BROKEN_PDF 는 쪽수가 없어(``_page_count`` 가 None) 쪽수 게이트를 아예
+    타지 않으므로, 쪽수 자체를 검사하려면 진짜로 열리는 PDF 가 필요하다.
+    한글이 필수는 아니지만 pymupdf 의 CJK 폰트 함정을 그대로 재현한다 —
+    "china-s" 는 한글 글리프를 조용히 지운다(eval/pdf.py 참고).
+    """
+    doc = pymupdf.open()
+    try:
+        for i in range(num_pages):
+            page = doc.new_page()
+            page.insert_textbox(
+                pymupdf.Rect(50, 50, page.rect.width - 50, 100),
+                f"테스트 페이지 {i + 1}",
+                fontsize=12,
+                fontname="korea",
+            )
+        return doc.tobytes()
+    finally:
+        doc.close()
 
 
 def run_async(coro_fn):
@@ -301,6 +325,33 @@ def test_the_second_upload_is_refused_and_deleting_does_not_reopen_it():
     third = run_async(scenario)
 
     assert third.status_code == 403, "문서를 지우자 한도가 초기화됐다"
+
+
+def test_a_single_oversized_upload_is_refused_even_as_the_first_document():
+    """문서 개수 한도(1개)는 첫 업로드를 통과시킨다 — 이력이 0이니까.
+
+    비용은 문서 수가 아니라 쪽수에 비례한다. 그래서 500쪽까지 허용되는
+    절대 상한(``max_upload_pages``)과 별개로, 미인증 계정은 쪽수 자체로도
+    막혀야 한다 — 안 그러면 "문서 1개"가 500쪽짜리 PDF 한 장을 그대로
+    허용하는 장식이 된다.
+    """
+    upload_limiter.reset()
+
+    async def scenario():
+        async with await _client() as client:
+            await _signup(client)
+
+            pdf = _multi_page_pdf(settings.unverified_quota_pages + 1)
+            response = await client.post(
+                "/documents",
+                files={"file": ("big.pdf", pdf, "application/pdf")},
+            )
+        return response
+
+    response = run_async(scenario)
+
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == "email verification required"
 
 
 def test_issue_token_failure_during_signup_still_returns_201_with_a_session(

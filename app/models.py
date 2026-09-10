@@ -200,7 +200,9 @@ class UsageEvent(Base):
     kind: Mapped[str] = mapped_column(Text, nullable=False)  # query | ingest
     tokens_in: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tokens_out: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # Pages added by an ingest event; drives the monthly upload-page quota.
+    # Pages added by an ingest event (drives the monthly upload-page quota) or
+    # an upload event (drives the unverified taster page quota) — the two
+    # kinds are summed separately, each filtering on its own `kind`.
     pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # True when a query was served from the semantic cache (no LLM spend).
     cached: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

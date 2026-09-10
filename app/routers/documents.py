@@ -111,6 +111,14 @@ async def upload_document(
                 status_code=http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=f"document exceeds {settings.max_upload_pages} pages",
             )
+        # 문서 개수 게이트(위)는 이력만 본다 — 미인증 계정의 첫 업로드는
+        # 그 이력이 0이라 그냥 통과한다. 그런데 비용은 문서 수가 아니라
+        # 쪽수에 비례하므로, 첫 업로드라도 500쪽짜리면 여기서 따로 막아야
+        # 한다.
+        if not user.email_verified and await ingest.usage.unverified_pages_exceeded(
+            session, user.id, pages
+        ):
+            raise VERIFICATION_REQUIRED
         if await ingest.usage.upload_quota_exceeded(session, user.id, pages):
             raise HTTPException(
                 status_code=http_status.HTTP_429_TOO_MANY_REQUESTS,
@@ -131,7 +139,11 @@ async def upload_document(
     # 수락 시점에 남긴다. 색인 성공 시 기록되는 ``ingest`` 와 다른 사건이다:
     # 그쪽은 백그라운드가 끝나야 생겨서, 색인 전에 연달아 던진 업로드가
     # 카운터를 0으로 본 채 전부 통과하고 실패한 업로드는 세어지지도 않는다.
-    await ingest.usage.record(session, user.id, "upload")
+    # 쪽수도 함께 남긴다 — ``unverified_pages_exceeded`` 가 이력을 볼 때
+    # 쓰는 유일한 값이라, 안 남기면 미인증 계정의 쪽수 게이트는 매번
+    # "이력 0"만 보게 된다. 페이지 수를 모르는 파일(``pages is None``)은
+    # 0으로 남는다 — 어차피 그런 파일은 위의 쪽수 게이트 자체가 건너뛴다.
+    await ingest.usage.record(session, user.id, "upload", pages=pages or 0)
 
     path = _storage_path(doc.id, doc.filename)
     with open(path, "wb") as fh:

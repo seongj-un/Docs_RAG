@@ -144,6 +144,11 @@ class Settings(BaseSettings):
     # 재가입 어뷰즈가 그대로 통과한다. 0 이면 게이트를 끈다.
     unverified_quota_queries: int = 5
     unverified_quota_documents: int = 1
+    # 문서 개수만 세면 500쪽짜리 PDF 한 장으로 "문서 1개" 한도를 다 채우면서
+    # 그 안에서 500쪽 분량의 BGE-M3 임베딩을 태울 수 있다 — 비용은 문서
+    # 수가 아니라 쪽수에 비례하는데 문서 게이트는 쪽수를 전혀 보지 않는다.
+    # 그래서 별도 쪽수 상한을 둔다. 0 이면 게이트를 끈다.
+    unverified_quota_pages: int = 50
     # 인증 메일 재발송. 자기 메일함만 채우는 행위지만 Resend 무료 한도가
     # 하루 100통이라 태울 수 있다.
     rate_limit_verify_resend_per_min: int = 1
