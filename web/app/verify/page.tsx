@@ -66,7 +66,10 @@ function VerifyInner() {
       <div className={styles.heading}>
         <h1>이메일 확인이 끝났습니다</h1>
         <p className={styles.subtitle}>
-          이제 한도 없이 질문하고 문서를 올릴 수 있습니다.
+          {/* 인증해도 무제한이 되지 않는다 — 맛보기 쿼터(lib/api/types.ts)가
+           * 평소 한도로 바뀔 뿐이다. settings 페이지의 사용량 바를 하드코딩
+           * 없이 고친 것과 같은 이유로, 여기서도 숫자 없이 사실만 말한다. */}
+          이제 맛보기 쿼터가 풀려 평소 한도로 질문하고 문서를 올릴 수 있습니다.
         </p>
         <Link className={styles.link} href="/">
           돌아가기
@@ -78,7 +81,12 @@ function VerifyInner() {
   return (
     <div className={styles.heading}>
       <h1>{state.copy.title}</h1>
-      <p className={styles.subtitle}>{state.copy.hint}</p>
+      {/* VerifyBanner.tsx와 같은 이유의 role="status" — 실패 사유가 이펙트
+       * 완료 후에 나타나는 비동기 갱신이라, 이 표시가 없으면 스크린 리더
+       * 사용자는 "확인하고 있습니다…"에서 뭐가 바뀌었는지 알 길이 없다. */}
+      <p className={styles.subtitle} role="status">
+        {state.copy.hint}
+      </p>
       <ResendOrSignIn />
     </div>
   );
@@ -87,7 +95,11 @@ function VerifyInner() {
 /** 재발송은 세션이 있어야 한다. 없으면 로그인부터 안내한다. */
 function ResendOrSignIn() {
   const { user, loading } = useSession();
-  const [sent, setSent] = useState(false);
+  /* VerifyBanner.tsx와 같은 3상태 머신. sending 동안 버튼을 잠그지 않으면
+   * 더블클릭이나 Enter 연타로 재발송이 두 번 나간다 — 서버가 분당 1회로
+   * 막아주니 결과는 크지 않지만(두 번째 호출이 에러로 튈 뿐), 애초에 막을
+   * 수 있는 걸 화면에 흘릴 이유가 없다. */
+  const [state, setState] = useState<"idle" | "sending" | "sent">("idle");
   const [error, setError] = useState<string | null>(null);
 
   if (loading) return null;
@@ -105,25 +117,46 @@ function ResendOrSignIn() {
       </Link>
     );
   }
-  if (sent) {
-    return <p className={styles.subtitle}>링크를 다시 보냈습니다. 메일함을 확인해 주세요.</p>;
+  if (state === "sent") {
+    return (
+      <div className={styles.actions}>
+        <p className={styles.subtitle}>
+          링크를 다시 보냈습니다. 메일함을 확인해 주세요.
+        </p>
+        {/* 성공/미로그인/이미인증과 같은 다른 종료 분기들처럼, 여기도
+         * 막다른 화면으로 남기지 않는다. */}
+        <Link className={styles.link} href="/">
+          돌아가기
+        </Link>
+      </div>
+    );
   }
 
   async function onResend() {
+    setState("sending");
     setError(null);
     try {
       await auth.resendVerification();
-      setSent(true);
+      setState("sent");
     } catch (cause) {
       const copy = describeError(cause);
       setError(`${copy.title} ${copy.hint}`);
+      setState("idle");
     }
   }
 
   return (
     <div className={styles.actions}>
-      <Button onClick={() => void onResend()}>새 링크 받기</Button>
-      {error !== null && <p className={styles.error}>{error}</p>}
+      <Button onClick={() => void onResend()} disabled={state === "sending"}>
+        {state === "sending" ? "보내는 중…" : "새 링크 받기"}
+      </Button>
+      {/* VerifyBanner.tsx의 error span과 같은 이유 — role="status"가 없으면
+       * 재발송 실패를 스크린 리더 사용자에게 알릴 길이 없다. */}
+      {error !== null && (
+        <p className={styles.error} role="status">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
