@@ -81,6 +81,9 @@ def test_resend_posts_the_expected_payload(monkeypatch):
 
     asyncio.run(scenario())
 
+    # 잡아만 두고 검사하지 않으면 timeout 을 떼어내도 아무도 모른다.
+    # 매달린 배경 작업은 워커를 잡으므로 상한이 있다는 사실 자체가 계약이다.
+    assert captured["timeout"] == 10.0
     assert captured["url"] == "https://api.resend.com/emails"
     assert captured["headers"]["Authorization"] == "Bearer re_test_key"
     assert captured["json"]["from"] == "no-reply@example.test"
