@@ -11,3 +11,6 @@ storage/
 
 # DB 덤프 (scripts/db_backup.sh)
 backups/
+
+# scripts/bench_rerank_alternatives.py --mode onnx-export 산출물 (수백MB, 재생성 가능)
+scripts/.rerank_onnx/

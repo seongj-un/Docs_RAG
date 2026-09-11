@@ -6,3 +6,11 @@
 # local model serving.
 torch>=2.4
 FlagEmbedding>=1.3
+
+# scripts/bench_rerank_alternatives.py's onnx-export/onnx-bench/quality-onnx
+# modes — measures the ONNX Runtime int8 quantization path (see
+# .superpowers/sdd/rerank-alternatives-report.md). Ships a CoreMLExecutionProvider
+# on this Mac's onnxruntime wheel, which is how --provider CoreMLExecutionProvider
+# is reachable without a separate install.
+onnx>=1.16
+onnxruntime>=1.19
