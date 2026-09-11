@@ -40,6 +40,13 @@ class Settings(BaseSettings):
     # halves reranking time versus the old default of 50. Headroom shrinks as
     # a corpus grows, and the measurement corpus was smaller than a
     # production one would be — so the conservative number is what ships.
+    #
+    # 20 자체를 재확인함(2026-09-11, 호스트 MPS 모델 서버). wide 에서
+    # R@1 1.000 유지, 리랭킹 1211ms -> 474ms(2.55배). hard(40청크)에서도
+    # 1.000 유지, 1018ms -> 557ms — 이 코퍼스는 40개라 20에서 실제로
+    # 잘리는데도 품질이 떨어지지 않았다. 즉 20 은 사이값 추정이 아니라
+    # 두 코퍼스에서 직접 잰 값이다. (이 수치는 MPS 기준이고, 컨테이너
+    # CPU 의 29초/184초와는 다른 하드웨어다 — README 참조.)
     cand_k: int = 20         # candidates per retriever (dense top-N, sparse top-N)
     # Context size after reranking. Was 8; the M4 golden-set evaluation measured
     # context_precision 0.246 at that size (7 of 8 chunks typically irrelevant)
