@@ -165,7 +165,14 @@ async def upload_document(
         # Document 행과 한 커밋으로 묶는다 — 이 업로드를 받아들인다는 것은
         # 하나의 결정이라, 둘을 따로 커밋하면 그 사이에 죽었을 때 하나만
         # 살아남는 절반짜리 상태가 생긴다.
-        await ingest.usage.reserve(session, user.id, "upload", pages=pages or 0)
+        #
+        # settled=True: 위 쪽수는 이미 다 갖춰진 값이라 나중에
+        # commit_reservation 으로 채울 것이 없다 — 정산 전으로 남겨두면,
+        # 시간이 지난 뒤 usage.acquire_quota_lock 의 sweep 이 이 완결된
+        # 업로드 기록을 죽은 프로세스가 남긴 고아 예약으로 오인해 지운다.
+        await ingest.usage.reserve(
+            session, user.id, "upload", pages=pages or 0, settled=True
+        )
         await session.commit()
     except BaseException:
         await session.rollback()

@@ -10,7 +10,7 @@ what the spec's "일/월" limits mean.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -172,6 +172,11 @@ async def record(
             tokens_out=tokens_out,
             pages=pages,
             cached=cached,
+            # 이 행은 태어날 때 이미 완결된 사건이다(ingest 성공 기록 등,
+            # reserve()+commit_reservation 두 단계로 나눌 이유가 없는
+            # 호출자) — 정산 시각을 비워 두면 나중에 sweep 이 실제로 있었던
+            # 사용량을 고아 예약으로 오인해 지운다.
+            settled_at=datetime.now(timezone.utc),
         )
     )
     await session.commit()
@@ -195,6 +200,22 @@ async def record(
 # 성공하면 commit_reservation 이, 실패하면(예외 포함) release_reservation
 # 이 그 예약을 마무리한다 — 그래야 일어나지 않은 작업에 요금이 매겨지지
 # 않는다.
+#
+# 이 예약 행은 정산 전(``settled_at`` 이 NULL)이어도 위의 집계 함수들에
+# 그대로 잡혀야 한다 — 그래야 동시에 들어온 다른 요청이 이 슬롯을 "이미
+# 쓴 것"으로 보고 물러난다. 집계 함수에 ``settled_at`` 필터를 넣고 싶어질
+# 수 있는데, 그러면 이 파일 전체가 막으려는 경쟁이 그대로 되돌아온다 —
+# 절대 넣지 않는다.
+#
+# 문제는 이 행을 심은 프로세스가 commit_reservation/release_reservation
+# 에 이르기 전에 죽는 경우다(SIGKILL, OOM, 배포가 워커를 내리는 순간).
+# 그 예약은 아무도 마무리하지 못한 채 ``settled_at`` NULL 로 남는다.
+# 인증된 계정은 하루가 지나면 창이 굴러 넘어가 티가 안 나지만, 미인증
+# 계정의 맛보기 한도(unverified_quota_*)는 창이 없는 계정 수명 전체
+# 누적이라 그 한 행이 그 계정을 영영 잠근다. ``settled_at`` 이 정산
+# 여부의 표식이고(``record`` 는 즉시, ``commit_reservation`` 은 작업이
+# 끝나는 순간 채운다), 아래 ``acquire_quota_lock`` 의 sweep 이 그 표식을
+# 보고 스스로 낫는다.
 
 
 async def acquire_quota_lock(
@@ -219,16 +240,58 @@ async def acquire_quota_lock(
     않게 한다. ``hashtext`` 가 이 쌍을 정수 하나로 접는데, 해시가
     충돌해도 안전하다 — 무관한 두 요청이 잠깐 더 기다릴 뿐, 잠금을 쥔
     다음 실제로 무엇을 볼지는 뒤이어 다시 읽는 집계 쿼리가 결정한다.
+
+    잠근 김에 이 (kind, user_id) 의 죽은 예약도 여기서 정리한다 —
+    ``_sweep_stale_reservations`` 참고. 배경 잡도 시작 훅도 필요 없다:
+    이 사용자가 다음에 뭐라도 하는 순간이 곧 청소할 때다.
     """
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:key))").bindparams(
             key=f"quota:{kind}:{user_id}"
         )
     )
+    await _sweep_stale_reservations(session, user_id, kind)
+
+
+async def _sweep_stale_reservations(
+    session: AsyncSession, user_id: uuid.UUID, kind: str
+) -> None:
+    """이 사용자의 이 kind 에 대해, 끝내 정산되지 못한 예약을 지운다.
+
+    ``acquire_quota_lock`` 이 잠금을 쥔 직후, 호출자가 집계를 다시 읽기
+    **직전**에 실행된다 — 이미 이 (kind, user_id) 로 잠가 둔 김이라 그
+    사용자 자신의 행만 훑으면 되어 값싸고, 사용자가 다음으로 뭐라도 하는
+    순간 저절로 도니 배경 잡이나 기동 훅이 필요 없다.
+
+    ``settled_at`` 이 NULL 이면서 ``created_at`` 이 이 컷오프보다 오래된
+    행만 지운다 — 둘 다 걸어야 한다. NULL 만 보면 이제 막 심어져 아직
+    임베딩·리랭크·LLM 호출을 기다리는 중인, 완전히 정상적인 예약까지
+    걷어가 버린다: 동시에 들어온 다른 요청이 정확히 그 틈으로 쿼터를
+    새어나가게 만드는, 이 파일 전체가 막으려는 경쟁을 sweep 스스로
+    되살리는 셈이다. 그래서 ``settings.reservation_ttl_seconds`` 는
+    "가장 긴 정상 요청"보다 넉넉히 커야 한다 — 근거는 그 설정 자체의
+    주석 참조(app/config.py).
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        seconds=settings.reservation_ttl_seconds
+    )
+    await session.execute(
+        delete(UsageEvent).where(
+            UsageEvent.user_id == user_id,
+            UsageEvent.kind == kind,
+            UsageEvent.settled_at.is_(None),
+            UsageEvent.created_at < cutoff,
+        )
+    )
 
 
 async def reserve(
-    session: AsyncSession, user_id: uuid.UUID, kind: str, *, pages: int = 0
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    kind: str,
+    *,
+    pages: int = 0,
+    settled: bool = False,
 ) -> uuid.UUID:
     """실제 작업을 시작하기 전에 그 자리를 먼저 차지해 두는 행을 심는다.
 
@@ -238,6 +301,14 @@ async def reserve(
     커밋은 여기서 하지 않고 호출자에게 맡긴다 — 업로드처럼 같은
     트랜잭션에 다른 행(``Document``)을 함께 넣어야 하는 호출자가
     있어서, 언제 커밋할지는 이 함수가 결정할 일이 아니다.
+
+    ``settled=True`` 는 upload 처럼 값이 이 호출 시점에 이미 다 갖춰져
+    있어(쪽수는 잠그기 전 파싱으로 이미 알려져 있다) ``commit_reservation``
+    을 부를 일이 없는 호출자를 위한 것이다 — 그런 호출자가 기본값
+    (``settled=False``) 을 그대로 쓰면, 이 행은 영원히 정산 전으로
+    남아 시간이 지난 뒤 sweep 이 실제로 끝난 사용량을 고아 예약으로
+    오인해 지운다. 정말로 나중에 commit_reservation/release_reservation
+    으로 마무리할 호출자(query)만 기본값을 쓴다.
     """
     # id is generated here rather than left to the column default: that
     # default is only applied at flush time, so reading `event.id` right
@@ -245,7 +316,13 @@ async def reserve(
     # flush) would still be None — and every caller of `reserve` needs the
     # real id back immediately, before it ever flushes anything.
     event_id = uuid.uuid4()
-    event = UsageEvent(id=event_id, user_id=user_id, kind=kind, pages=pages)
+    event = UsageEvent(
+        id=event_id,
+        user_id=user_id,
+        kind=kind,
+        pages=pages,
+        settled_at=datetime.now(timezone.utc) if settled else None,
+    )
     session.add(event)
     return event_id
 
@@ -262,7 +339,14 @@ async def commit_reservation(
     await session.execute(
         update(UsageEvent)
         .where(UsageEvent.id == event_id)
-        .values(tokens_in=tokens_in, tokens_out=tokens_out, cached=cached)
+        .values(
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            cached=cached,
+            # 정산 완료 표식 — 이걸 안 채우면 이 행은 정상적으로 끝났는데도
+            # sweep 눈에는 여전히 고아 예약 후보로 보인다.
+            settled_at=datetime.now(timezone.utc),
+        )
     )
     await session.commit()
 

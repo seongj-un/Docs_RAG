@@ -129,6 +129,21 @@ class Settings(BaseSettings):
     # Quotas are counted in the database, so they hold across processes.
     quota_queries_per_day: int = 200
     quota_upload_pages_per_month: int = 1000
+    # usage.acquire_quota_lock 이 잠금을 쥔 김에 이 사용자의 이 kind 에 대해
+    # settled_at 이 없는(예약 중) 채로 이 시간보다 오래된 usage_events 행을
+    # 지운다 — reserve() 를 심은 프로세스가 commit_reservation/
+    # release_reservation 에 이르기 전에 죽었다는 뜻이라, 그 슬롯을 영원히
+    # 갉아먹게 둘 이유가 없다(미인증 계정의 맛보기 한도는 창이 없어 굴러
+    # 넘어가지 않으므로 특히 그렇다). 진행 중인 정상 요청보다 짧게 잡으면
+    # 그 요청의 예약을 다음 동시 요청이 스윕해 지워버려 쿼터가 새는 쪽으로
+    # 사고가 난다 — 값은 반드시 "가장 긴 정상 요청"보다 넉넉히 커야 한다.
+    # embed()/rerank() 는 각각 HTTP 클라이언트 타임아웃이 120초(하드코딩,
+    # rerank.py/embeddings.py)이고 한 요청 안에서 순서대로 둘 다 겪을 수
+    # 있다 — 240초. 여기에 LLM 호출 실측치(34~40초)를 더하면 최악의 "그래도
+    # 정상적으로 끝나는" 요청이 300초 안팎이 된다. 600초는 그 두 배에 가까운
+    # 여유이면서도, 진짜 죽은 예약이 다음 사용까지 10분 넘게 계정을 잠그지는
+    # 않는다.
+    reservation_ttl_seconds: int = 600
     # Upload guards, checked before any embedding spend.
     max_upload_mb: int = 50
     max_upload_pages: int = 500

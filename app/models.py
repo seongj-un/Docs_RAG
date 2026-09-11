@@ -206,6 +206,19 @@ class UsageEvent(Base):
     pages: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # True when a query was served from the semantic cache (no LLM spend).
     cached: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # NULL means this row is still a reservation: a slot claimed by
+    # services/usage.py's reserve() before the slow work behind it
+    # (embedding/rerank/LLM) has run, so it is not yet known whether that
+    # work will finish, fail, or never get the chance to (the process dies).
+    # record() and commit_reservation() both set this the moment a row's
+    # values are final. A NULL row still counts toward quotas — that is what
+    # makes a reservation visible to a concurrent request before the work
+    # behind it completes — but one older than
+    # settings.reservation_ttl_seconds is what acquire_quota_lock's sweep
+    # treats as abandoned and deletes.
+    settled_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
