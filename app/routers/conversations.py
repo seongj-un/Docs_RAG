@@ -163,6 +163,7 @@ async def _stream_turn(
         # the handlers below, and an unbound name there would replace the real
         # error with a NameError.
         question_id: uuid.UUID | None = None
+        runner: QueryRunner | None = None
         try:
             conversation = await _owned(session, conversation_id, user)
             # Absent means "whatever this thread is scoped to"; present means
@@ -277,10 +278,17 @@ async def _stream_turn(
                 "stream failed for conversation %s: %s %s",
                 conversation_id, exc.status_code, exc.detail,
             )
+            # Same shape as the message cleanup right below: a reservation
+            # left standing past this point would charge the quota for a turn
+            # that produced no answer.
+            if runner is not None:
+                await runner.release_reservation()
             await _discard_unanswered(session, question_id)
             yield _sse("error", {"status": exc.status_code, "detail": exc.detail})
         except Exception:  # noqa: BLE001 - the client needs *something*
             logger.exception("stream crashed for conversation %s", conversation_id)
+            if runner is not None:
+                await runner.release_reservation()
             await _discard_unanswered(session, question_id)
             yield _sse("error", {"status": 500, "detail": "internal error"})
 

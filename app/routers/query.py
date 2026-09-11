@@ -46,33 +46,42 @@ async def query(
         session, user, body.question, document_id=body.document_id, hybrid=body.hybrid
     )
     await runner.enforce_limits(request.client.host if request.client else "unknown")
-    await runner.resolve_scope()
-    await runner.embed()
+    # enforce_limits already committed a quota reservation for this request.
+    # Everything below can fail (a document scope that turns out unowned, the
+    # embedding server being down, the LLM call erroring) after that
+    # reservation exists but before it is turned into a real record, and a
+    # query that did not happen must not spend the quota it would have used.
+    try:
+        await runner.resolve_scope()
+        await runner.embed()
 
-    hit = await runner.cached_answer()
-    if hit is not None:
-        await runner.record_cache_hit(hit)
+        hit = await runner.cached_answer()
+        if hit is not None:
+            await runner.record_cache_hit(hit)
+            return QueryResponse(
+                answer=hit.answer,
+                refused=hit.refused,
+                citations=[Citation(**c) for c in hit.citations],
+            )
+
+        found = await runner.retrieve()
+        async with runner.watch.time("generate"):
+            result = await generate.answer_question(
+                body.question, found.chunks, min_score=runner.grounding_floor
+            )
+
+        citations = to_citations(result.citations)
+        await runner.finalize(
+            found=found,
+            answer=result.answer,
+            refused=result.refused,
+            citations=[c.model_dump(mode="json") for c in citations],
+            tokens_in=result.tokens_in,
+            tokens_out=result.tokens_out,
+        )
         return QueryResponse(
-            answer=hit.answer,
-            refused=hit.refused,
-            citations=[Citation(**c) for c in hit.citations],
+            answer=result.answer, refused=result.refused, citations=citations
         )
-
-    found = await runner.retrieve()
-    async with runner.watch.time("generate"):
-        result = await generate.answer_question(
-            body.question, found.chunks, min_score=runner.grounding_floor
-        )
-
-    citations = to_citations(result.citations)
-    await runner.finalize(
-        found=found,
-        answer=result.answer,
-        refused=result.refused,
-        citations=[c.model_dump(mode="json") for c in citations],
-        tokens_in=result.tokens_in,
-        tokens_out=result.tokens_out,
-    )
-    return QueryResponse(
-        answer=result.answer, refused=result.refused, citations=citations
-    )
+    except BaseException:
+        await runner.release_reservation()
+        raise

@@ -12,7 +12,7 @@ what the spec's "일/월" limits mean.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -174,4 +174,107 @@ async def record(
             cached=cached,
         )
     )
+    await session.commit()
+
+
+# --- check-then-act 를 원자로 만들기 위한 예약 패턴 --------------------
+#
+# 위의 *_exceeded 함수들은 순수하게 "지금 넘었나"만 answer 한다 — 호출자가
+# 그 answer 를 받아 실제로 작업을 하는 사이 다른 요청이 같은 answer 를
+# 받아버리는 것이 이 파일이 아니라 pipeline.py/documents.py 가 겪던 경쟁
+# 조건이었다. 그 간격을 없애려면 "세다"와 "쓴다" 사이에 아무도 끼어들 수
+# 없어야 하는데, 그러자고 체크부터 기록까지 통째로 잠그면(트랜잭션 하나가
+# 임베딩·리랭크·LLM 호출까지 물고 있게 되어) 그 시간 내내 커넥션 하나를
+# 붙잡고 이 사용자의 다음 요청까지 전부 세워버린다 — 스펙이 금지하는
+# 바로 그 트레이드오프다.
+#
+# 그래서 "체크 + 예약"만 아래 세 함수로 원자화한다: acquire_quota_lock 으로
+# 짧게 잠그고, *_exceeded 로 다시 세고, reserve 로 행을 하나 심고, 곧장
+# 커밋한다 — 이 전체가 로컬 쿼리 몇 번뿐이라 눈 깜짝할 새 끝난다. 실제
+# 작업(임베딩·리트리벌·리랭크·생성)은 잠금이 없는 채로 그 뒤에 일어나고,
+# 성공하면 commit_reservation 이, 실패하면(예외 포함) release_reservation
+# 이 그 예약을 마무리한다 — 그래야 일어나지 않은 작업에 요금이 매겨지지
+# 않는다.
+
+
+async def acquire_quota_lock(
+    session: AsyncSession, user_id: uuid.UUID, kind: str
+) -> None:
+    """이 사용자의 이 kind 에 대한 "읽고 나서 쓴다"를 원자로 만든다.
+
+    잠금이 없으면 동시에 들어온 요청들이 모두 같은(아직 반영 전) 집계를
+    읽고 모두 통과해버린다 — 분당 버킷(services/ratelimit.py)은 요청이
+    얼마나 빨리 들어오는지만 막지 이 문제는 막지 못한다. 그래서 집계를
+    다시 읽기 직전에 이 잠금으로 같은 (kind, user_id) 의 다른 요청을
+    뒤로 세운다.
+
+    ``pg_advisory_xact_lock`` 은 트랜잭션 범위라 짝이 되는 "해제" 호출이
+    없다 — 호출자가 다음으로 커밋하거나 롤백하는 순간 저절로 풀린다.
+    그래서 호출자는 이 호출 뒤로 임베딩·LLM 호출처럼 느린 await 없이
+    곧장 커밋까지 가야 한다: 그러지 않으면 이 사용자의 다른 요청 전부가
+    그 시간만큼 붙잡히고, 그건 스펙이 명시적으로 금지하는 바로 그
+    상황이다.
+
+    (kind, user_id) 로 묶어 종류가 다르면(query vs upload) 서로 막지
+    않게 한다. ``hashtext`` 가 이 쌍을 정수 하나로 접는데, 해시가
+    충돌해도 안전하다 — 무관한 두 요청이 잠깐 더 기다릴 뿐, 잠금을 쥔
+    다음 실제로 무엇을 볼지는 뒤이어 다시 읽는 집계 쿼리가 결정한다.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))").bindparams(
+            key=f"quota:{kind}:{user_id}"
+        )
+    )
+
+
+async def reserve(
+    session: AsyncSession, user_id: uuid.UUID, kind: str, *, pages: int = 0
+) -> uuid.UUID:
+    """실제 작업을 시작하기 전에 그 자리를 먼저 차지해 두는 행을 심는다.
+
+    이 행 자체가 예약이다 — 따로 맞춰야 할 카운터가 없다. 작업이
+    끝나면 ``commit_reservation`` 이 진짜 값(토큰 수 등)을 채우고,
+    끝내 끝나지 못하면 ``release_reservation`` 이 이 행을 지운다.
+    커밋은 여기서 하지 않고 호출자에게 맡긴다 — 업로드처럼 같은
+    트랜잭션에 다른 행(``Document``)을 함께 넣어야 하는 호출자가
+    있어서, 언제 커밋할지는 이 함수가 결정할 일이 아니다.
+    """
+    # id is generated here rather than left to the column default: that
+    # default is only applied at flush time, so reading `event.id` right
+    # after construction (before this function's caller has any reason to
+    # flush) would still be None — and every caller of `reserve` needs the
+    # real id back immediately, before it ever flushes anything.
+    event_id = uuid.uuid4()
+    event = UsageEvent(id=event_id, user_id=user_id, kind=kind, pages=pages)
+    session.add(event)
+    return event_id
+
+
+async def commit_reservation(
+    session: AsyncSession,
+    event_id: uuid.UUID,
+    *,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
+    cached: bool = False,
+) -> None:
+    """예약이 서 있던 작업이 실제로 끝났을 때 진짜 값을 채우고 커밋한다."""
+    await session.execute(
+        update(UsageEvent)
+        .where(UsageEvent.id == event_id)
+        .values(tokens_in=tokens_in, tokens_out=tokens_out, cached=cached)
+    )
+    await session.commit()
+
+
+async def release_reservation(session: AsyncSession, event_id: uuid.UUID) -> None:
+    """예약이 서 있던 작업이 끝내 끝나지 못했을 때 그 행을 지운다.
+
+    먼저 롤백부터 한다 — 여기로 오게 만든 실패가 세션의 트랜잭션을 이미
+    못 쓰게 만들어 놓았을 수 있어서다(``_discard_unanswered`` 가 같은
+    이유로 먼저 롤백하는 것과 같은 사정이다). 아무것도 바꾸지 않은
+    세션에서는 그냥 안전한 공짜 호출이다.
+    """
+    await session.rollback()
+    await session.execute(delete(UsageEvent).where(UsageEvent.id == event_id))
     await session.commit()

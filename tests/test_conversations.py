@@ -536,7 +536,7 @@ def test_failed_turn_leaves_no_unanswered_question(monkeypatch):
         transport = ASGITransport(app=app)
         try:
             async with AsyncClient(transport=transport, base_url="http://test") as c:
-                await _signup(c)
+                email = await _signup(c)
                 conversation = (await c.post("/conversations", json={})).json()
                 names = []
                 async with c.stream(
@@ -547,12 +547,22 @@ def test_failed_turn_leaves_no_unanswered_question(monkeypatch):
                         if line.startswith("event:"):
                             names.append(line.split(":", 1)[1].strip())
                 history = (await c.get(f"/conversations/{conversation['id']}")).json()
-                return names, history
+
+            # enforce_limits committed a reservation before embed ever ran;
+            # the except branch must have released it or this failed turn
+            # would silently spend a slot of this user's query quota.
+            from app.services import usage
+
+            async with SessionLocal() as session:
+                user = await auth.get_user_by_email(session, email)
+                total = await usage.queries_total(session, user.id)
+            return names, history, total
         finally:
             await engine.dispose()
 
-    names, history = asyncio.run(scenario())
+    names, history, total = asyncio.run(scenario())
     assert names == ["error"], names
     assert history["messages"] == [], (
         "실패한 턴의 질문이 이력에 남았습니다 — 재시도할수록 답 없는 질문만 쌓입니다"
     )
+    assert total == 0, "실패한 턴이 쿼터를 소비했다 — enforce_limits 의 예약이 풀리지 않았다"

@@ -327,6 +327,78 @@ def test_the_second_upload_is_refused_and_deleting_does_not_reopen_it():
     assert third.status_code == 403, "문서를 지우자 한도가 초기화됐다"
 
 
+# --- 경쟁 조건: 업로드 쿼터의 체크는 원자적 예약이어야 한다 ---
+
+
+def test_concurrent_uploads_from_an_unverified_account_accept_only_one():
+    """분당 5회짜리 버스트가 문서 1개짜리 평생 한도를 그대로 뚫을 수 있는가.
+
+    그냥 asyncio.gather 로 두 업로드를 던지기만 하면 로컬 Postgres 는
+    왕복이 워낙 빨라서 매번 우연히 순차 실행처럼 끝나버릴 수 있다 —
+    통과해도 진짜 경쟁을 검증한 게 아니라 운을 검증한 것이다
+    (test_verification.py 의 두 경쟁 테스트가 푸는 것과 같은 문제). 그래서
+    세 번째 커넥션으로 업로드 라우트가 재검사 직전에 잡는 것과 같은
+    어드바이저리 락을 먼저 쥐어 두 업로드를 그 뒤에 정말로 묶어세우고
+    (타임아웃 안에 끝나지 않았다는 것으로 "진짜 막혔다"까지 확인한 뒤)
+    락을 풀어, 어느 쪽이 이길지는 Postgres 의 잠금 대기열에 맡긴다.
+    """
+    from app.services import usage
+
+    upload_limiter.reset()
+
+    async def scenario():
+        async with await _client() as client:
+            _, body = await _signup(client)
+            user_id = uuid.UUID(body["id"])
+
+            async with SessionLocal() as blocker:
+                # 업로드 라우트가 재검사 직전에 잡는 것과 정확히 같은 잠금이다
+                # — 다른 키를 쥐면 이 테스트는 아무 경쟁도 만들지 못한다.
+                await usage.acquire_quota_lock(blocker, user_id, "upload")
+
+                task_a = asyncio.create_task(
+                    client.post(
+                        "/documents",
+                        files={"file": ("a.pdf", BROKEN_PDF, "application/pdf")},
+                    )
+                )
+                task_b = asyncio.create_task(
+                    client.post(
+                        "/documents",
+                        files={"file": ("b.pdf", BROKEN_PDF, "application/pdf")},
+                    )
+                )
+
+                # 블로커가 락을 쥔 채로 이미 둘 다 끝나버렸다면 이 테스트는
+                # 아무 경쟁도 만들지 못한 것이다 — 조용히 통과하는 대신
+                # 여기서 드러낸다.
+                done, _pending = await asyncio.wait({task_a, task_b}, timeout=0.3)
+                assert not done, "블로커가 잠갔는데 업로드가 먼저 끝났다"
+
+                await blocker.rollback()  # 아무것도 안 바꿨으니 롤백으로 락만 푼다
+
+                resp_a, resp_b = await asyncio.gather(task_a, task_b)
+
+            async with SessionLocal() as check:
+                accepted = await usage.documents_total(check, user_id)
+        return resp_a, resp_b, accepted
+
+    resp_a, resp_b, accepted = run_async(scenario)
+
+    codes = sorted([resp_a.status_code, resp_b.status_code])
+    assert codes == [202, 403], (
+        resp_a.status_code, resp_b.status_code, resp_a.text, resp_b.text
+    )
+    loser = resp_a if resp_a.status_code == 403 else resp_b
+    assert loser.json()["detail"] == "email verification required"
+    # 응답 개수뿐 아니라 실제로 남은 행도 하나여야 한다 — 두 응답 중
+    # 하나가 403 이어도, 잠금이 조금만 늦게 걸렸다면 두 행이 이미 다
+    # 커밋됐을 수 있다.
+    assert accepted == settings.unverified_quota_documents, (
+        f"{accepted}개가 커밋됐다 — 한도({settings.unverified_quota_documents})가 뚫렸다"
+    )
+
+
 def test_a_single_oversized_upload_is_refused_even_as_the_first_document():
     """문서 개수 한도(1개)는 첫 업로드를 통과시킨다 — 이력이 0이니까.
 

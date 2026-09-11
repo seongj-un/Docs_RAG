@@ -103,19 +103,44 @@ class QueryRunner:
         )
         self.dense: list[float] = []
         self.sparse: SparseVector | None = None
+        # enforce_limits 가 예약에 성공하면 채워지고, record_cache_hit 나
+        # finalize 가 그 예약을 진짜 기록으로 바꾸는 순간 다시 None 이 된다.
+        # 요청이 둘 중 어느 쪽에도 이르지 못하고 끝나면 이 값이 곧
+        # release_reservation 이 지워야 할 대상이다.
+        self._reservation_id: uuid.UUID | None = None
 
     async def enforce_limits(self, client_ip: str) -> None:
         if not query_limiter.allow(f"user:{self.user.id}") or not query_limiter.allow(
             f"ip:{client_ip}"
         ):
             raise too_many("query rate limit exceeded")
-        # 미인증 계정은 다른 한도를 다른 창으로 센다 — 하루가 아니라 계정
-        # 수명 전체. 그래야 재가입으로 초기화되지 않는다.
-        if not self.user.email_verified:
-            if await usage.unverified_query_exceeded(self.session, self.user.id):
-                raise VERIFICATION_REQUIRED
-        elif await usage.query_quota_exceeded(self.session, self.user.id):
-            raise too_many("daily query quota exceeded")
+
+        # 여기서부터 커밋까지가 "세고 나서 쓴다"를 원자로 만드는 구간이다.
+        # 잠금 없이는 동시 요청들이 모두 같은(터지기 전) 집계를 읽고 모두
+        # 통과해, 위의 분당 버킷이 막는 "얼마나 빨리"와 다른 문제 —
+        # "얼마나 많이"가 새어나간다. 잠금은 트랜잭션 범위라 이 커밋(또는
+        # release_reservation 의 롤백)이 곧 해제이므로, 로컬 쿼리 몇 번
+        # 뒤에는 곧바로 풀린다 — 뒤이은 embed/retrieve/rerank/generate 는
+        # 잠금 없이 실행된다. LLM 호출은 수십 초가 걸릴 수 있어서, 그
+        # 동안 커넥션을 붙잡고 이 사용자의 다른 요청까지 세우는 것은
+        # 스펙이 명시적으로 금지한 트레이드오프다.
+        try:
+            await usage.acquire_quota_lock(self.session, self.user.id, "query")
+            # 미인증 계정은 다른 한도를 다른 창으로 센다 — 하루가 아니라
+            # 계정 수명 전체. 그래야 재가입으로 초기화되지 않는다.
+            if not self.user.email_verified:
+                if await usage.unverified_query_exceeded(self.session, self.user.id):
+                    raise VERIFICATION_REQUIRED
+            elif await usage.query_quota_exceeded(self.session, self.user.id):
+                raise too_many("daily query quota exceeded")
+
+            self._reservation_id = await usage.reserve(
+                self.session, self.user.id, "query"
+            )
+            await self.session.commit()
+        except BaseException:
+            await self.session.rollback()
+            raise
 
     async def resolve_scope(self) -> None:
         """A scope the caller does not own is 404, same as the documents API.
@@ -151,8 +176,11 @@ class QueryRunner:
         )
 
     async def record_cache_hit(self, hit: cache.CachedAnswer) -> None:
-        # Counts against the quota but costs no LLM call.
-        await usage.record(self.session, self.user.id, "query", cached=True)
+        # Counts against the quota but costs no LLM call. Turns the
+        # reservation enforce_limits already made into the real record rather
+        # than inserting a second row for the same request.
+        await usage.commit_reservation(self.session, self._reservation_id, cached=True)
+        self._reservation_id = None
         self.draft.cached = True
         self.draft.refused = hit.refused
         self.draft.answer = hit.answer
@@ -213,13 +241,16 @@ class QueryRunner:
         tokens_out: int,
     ) -> None:
         """Record usage, populate the cache, and write the trace."""
-        await usage.record(
+        # Turns the reservation enforce_limits made into the real record —
+        # the row already exists, so this fills in what was not known yet at
+        # reservation time instead of inserting a second one.
+        await usage.commit_reservation(
             self.session,
-            self.user.id,
-            "query",
+            self._reservation_id,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
         )
+        self._reservation_id = None
         await cache.store(
             self.session,
             user_id=self.user.id,
@@ -239,3 +270,21 @@ class QueryRunner:
         self.draft.stage_ids = found.stage_ids
         self.draft.stage_chunks = found.stage_chunks
         await tracing.record(self.session, self.draft, self.watch)
+
+    async def release_reservation(self) -> None:
+        """Undo the quota reservation if the work it stood for never finished.
+
+        Callers must reach this from every failure path between
+        ``enforce_limits`` and whichever of ``record_cache_hit``/``finalize``
+        the request was headed for — embedding a 503, retrieval raising,
+        the LLM call failing partway through a stream — or the reservation
+        commits the request never earned. Safe to call unconditionally from
+        an ``except``/``finally``: once ``record_cache_hit`` or ``finalize``
+        has run, ``_reservation_id`` is already ``None`` and this is a no-op,
+        which is what lets both routers call it blindly on any exception
+        without first working out whether one of those two ran.
+        """
+        if self._reservation_id is None:
+            return
+        await usage.release_reservation(self.session, self._reservation_id)
+        self._reservation_id = None
