@@ -41,12 +41,20 @@ class Settings(BaseSettings):
     # a corpus grows, and the measurement corpus was smaller than a
     # production one would be — so the conservative number is what ships.
     #
-    # 20 자체를 재확인함(2026-09-11, 호스트 MPS 모델 서버). wide 에서
-    # R@1 1.000 유지, 리랭킹 1211ms -> 474ms(2.55배). hard(40청크)에서도
-    # 1.000 유지, 1018ms -> 557ms — 이 코퍼스는 40개라 20에서 실제로
-    # 잘리는데도 품질이 떨어지지 않았다. 즉 20 은 사이값 추정이 아니라
-    # 두 코퍼스에서 직접 잰 값이다. (이 수치는 MPS 기준이고, 컨테이너
-    # CPU 의 29초/184초와는 다른 하드웨어다 — README 참조.)
+    # ⚠️ 위 근거는 **실제 문서 크기에서 검증된 적이 없다.** 저 측정에 쓴
+    # wide 는 청크가 53자, hard 는 73자다. 실제 문서(이 DB 의
+    # 인공지능기본법)는 중앙 1,295자다. 리랭킹 비용은 후보 개수가 아니라
+    # 입력 총길이에 지배되므로 둘은 다른 이야기다 — 2026-09-11 실측:
+    #
+    #   같은 CAND_K=20 에서   53자 청크 →   474ms
+    #                      1,295자 청크 → 9,409ms
+    #   1,295자 기준  K=10 → 6,760ms · K=5 → 1,175ms · K=3 → 696ms
+    #
+    # 이 저장소는 같은 함정에 이미 한 번 빠졌다(RERANK_MAX_CHARS 실험이
+    # 짧은 픽스처 때문에 "변화 없음"으로 나왔던 건). 현실적 길이이면서
+    # CAND_K 보다 큰 코퍼스가 아직 없어서(longchunk 는 1,024자지만 12청크,
+    # wide 는 260청크지만 53자) 20 이 옳은 값인지는 미결이다.
+    # 그런 코퍼스를 만들어 다시 정할 것.
     cand_k: int = 20         # candidates per retriever (dense top-N, sparse top-N)
     # Context size after reranking. Was 8; the M4 golden-set evaluation measured
     # context_precision 0.246 at that size (7 of 8 chunks typically irrelevant)
