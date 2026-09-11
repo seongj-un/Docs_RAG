@@ -77,11 +77,15 @@ class Settings(BaseSettings):
     #
     # 즉 이 설정은 더 이상 "공짜 속도"가 아니라 정확도-지연 교환이다:
     #   K=20 → 4.4초 / R@1 0.868      K=40 → 8.8초 / R@1 0.947
-    # 8점을 4.4초에 사는 셈이다. **기본값은 20 으로 두되 잠정이다** —
-    # 어느 쪽을 살지는 제품 결정이고, 리랭킹 자체를 싸게 만드는 쪽
-    # (ONNX int8: CPU 로 GPU 속도, 실제 길이 품질은 미측정)이 먼저
-    # 풀리면 교환 자체를 피할 수 있다.
-    cand_k: int = 20         # candidates per retriever (dense top-N, sparse top-N)
+    # **40 을 택했다** — 8점을 4.4초에 산다. 정답이 1위에 안 오는 질의가
+    # 여덟 중 하나에서 스무 중 하나로 줄어드는 쪽이, 답을 4초 빨리 주고
+    # 틀리는 쪽보다 낫다고 판단했다(2026-09-11, 제품 결정).
+    #
+    # 이 교환 자체를 없애려면 리랭킹이 싸져야 한다. ONNX int8 이 CPU 만으로
+    # GPU 속도를 냈다(8.7초 vs 9.4초, scripts/bench_rerank_alternatives.py)
+    # — 다만 그 품질 측정은 짧은 청크 코퍼스 기준이라, 실제 길이에서
+    # 확인되기 전까지는 후보이지 해답이 아니다.
+    cand_k: int = 40         # candidates per retriever (dense top-N, sparse top-N)
     # Context size after reranking. Was 8; the M4 golden-set evaluation measured
     # context_precision 0.246 at that size (7 of 8 chunks typically irrelevant)
     # while R@3 was 1.000 — the needed page was always within the top 3, so the
