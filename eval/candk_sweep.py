@@ -157,7 +157,19 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--corpus", default="wide")
     parser.add_argument("--k", type=int, default=5)
+    # 구간을 좁혀 다시 돌 수 있게 한다. 실제 크기 코퍼스에서는 한 설정이
+    # 질의당 수 초라 전 구간(100~5)이 한 시간을 넘는데, 답이 필요한 곳은
+    # 대개 무릎 근처 몇 점뿐이다.
+    parser.add_argument(
+        "--ks", default=None,
+        help="쉼표로 구분한 CAND_K 목록 (예: 50,45,40,35,30). 생략하면 기본 전 구간.",
+    )
     args = parser.parse_args()
+
+    global CAND_KS
+    if args.ks:
+        CAND_KS = tuple(sorted((int(x) for x in args.ks.split(",")), reverse=True))
+        print(f"CAND_K 구간을 좁혀서 돈다: {CAND_KS}")
 
     corpus = load(args.corpus)
     print(f"코퍼스 {args.corpus}: {len(corpus.CLAUSES)}쪽, 질의 {len(corpus.QUERIES)}개")

@@ -124,16 +124,21 @@ def test_counts_and_stage_percentiles():
                     "/admin/stats?hours=1", headers={"X-Admin-Token": TOKEN}
                 )
                 body = resp.json()
+                # 같은 순간을 넓은 창으로도 본다. 3일 전 행이 창 밖이라는
+                # 것은 이 둘의 **차이**로만 정직하게 증명된다 — 아래 참조.
+                wide = (await c.get(
+                    "/admin/stats?hours=96", headers={"X-Admin-Token": TOKEN}
+                )).json()
 
             async with SessionLocal() as session:
                 fresh = await session.get(User, user_id)
                 await session.delete(fresh)  # traces cascade
                 await session.commit()
-            return resp.status_code, body
+            return resp.status_code, body, wide
         finally:
             await engine.dispose()
 
-    status, body = asyncio.run(scenario())
+    status, body, wide = asyncio.run(scenario())
     assert status == 200
 
     # Other rows may exist from earlier runs, so assert on what this test added.
@@ -142,8 +147,18 @@ def test_counts_and_stage_percentiles():
     assert body["queries"]["refused"] >= 1
     assert body["tokens_in"] >= 18
 
-    # The 3-day-old trace's 99999ms must not reach the window's tail.
-    assert body["total_ms"]["p95"] < 99999
+    # 3일 전 행이 1시간 창 밖이라는 것을 창 둘의 차이로 증명한다.
+    #
+    # 전에는 `p95 < 99999` 하나로 확인했는데, 그건 두 방향 모두로 틀렸다.
+    # ① 창 안에 99999ms 를 넘는 **다른** 행이 하나만 생겨도 깨진다 —
+    #    실제로 이 DB 에 149초짜리 진짜 질의가 기록되면서 깨졌다.
+    # ② 반대로 그 행이 창 안에 잘못 포함되더라도, 행이 충분히 많으면
+    #    p95 는 여전히 99999 아래일 수 있어 버그를 놓친다.
+    # 차이로 보면 다른 행이 몇 개 있든 양쪽 창에 똑같이 들어가므로
+    # 상쇄되고, 남는 것은 이 테스트가 심은 행뿐이다. 파일 위쪽 단언들이
+    # "이 테스트가 추가한 것만 본다"는 원칙과도 같아진다.
+    assert wide["queries"]["total"] - body["queries"]["total"] >= 1
+    assert wide["tokens_in"] - body["tokens_in"] >= 999
 
     # Stage percentiles come only from uncached traces, so they sit inside the
     # range those rows actually recorded — a cached 0/None would drag p50 down.
