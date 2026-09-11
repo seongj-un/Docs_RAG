@@ -63,11 +63,24 @@ class Settings(BaseSettings):
     # 정답을 후보에 못 올린다.** 쪽이 길어지면 사실이 희석돼 dense 순위가
     # 나빠지기 때문이다(deep K=20 에서 dense 적중 0.737).
     #
+    # 무릎은 40 이다(30~50 을 5 단위로 다시 훑음):
+    #
+    #   K=50  R@1 0.947  11.5초      K=35  R@1 0.895  7.7초
+    #   K=45  R@1 0.947   9.9초      K=30  R@1 0.895  6.5초
+    #   K=40  R@1 0.947   8.8초  ← 0.947 을 지키는 가장 싼 값
+    #
+    # 40 아래로 내려가는 순간 semantic 질의의 천장이 1.000 → 0.929 로
+    # 꺾인다(dense 는 30 에서도 1.000 인데 sparse 가 0.714 라, 융합 후
+    # 후보에 못 드는 것이 생긴다). exact 는 sparse 가 30 까지 1.000 을
+    # 지켜 멀쩡하다 — 두 유형이 서로 다른 채널에 기대고 있어서, 깊이를
+    # 줄이면 semantic 쪽이 먼저 무너진다.
+    #
     # 즉 이 설정은 더 이상 "공짜 속도"가 아니라 정확도-지연 교환이다:
-    #   K=20 → 4.4초 / R@1 0.868      K=50 → 10.8초 / R@1 0.947
-    # 20 을 유지하는 것은 잠정이다. 어느 쪽을 살지는 제품 결정이고,
-    # 리랭킹 자체를 싸게 만드는 쪽(ONNX int8: CPU 로 GPU 속도, 품질 손실
-    # 미측정)이 먼저 풀려야 이 교환을 피할 수 있다.
+    #   K=20 → 4.4초 / R@1 0.868      K=40 → 8.8초 / R@1 0.947
+    # 8점을 4.4초에 사는 셈이다. **기본값은 20 으로 두되 잠정이다** —
+    # 어느 쪽을 살지는 제품 결정이고, 리랭킹 자체를 싸게 만드는 쪽
+    # (ONNX int8: CPU 로 GPU 속도, 실제 길이 품질은 미측정)이 먼저
+    # 풀리면 교환 자체를 피할 수 있다.
     cand_k: int = 20         # candidates per retriever (dense top-N, sparse top-N)
     # Context size after reranking. Was 8; the M4 golden-set evaluation measured
     # context_precision 0.246 at that size (7 of 8 chunks typically irrelevant)
