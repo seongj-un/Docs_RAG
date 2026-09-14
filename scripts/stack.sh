@@ -16,24 +16,60 @@ cd "$(dirname "$0")/.."
 PY="${PY:-.venv/bin/python}"
 MODEL_PORT="${MODEL_PORT:-8081}"
 HTTP_PORT="${HTTP_PORT:-8088}"
-LOG="${MODEL_LOG:-/tmp/docs_rag_models.log}"
+# 기본 경로가 /tmp 가 아닌 이유: macOS 는 /private/tmp 를 주기적으로 비운다
+# (periodic daily — 며칠 손대지 않은 파일을 지운다). 이 로그는 정확히 "며칠 전
+# 한 번 이상했는데" 를 되짚을 때 꺼내는 물건이라 그 청소에 걸리면 안 된다.
+# ~/Library/Logs 는 macOS 가 사용자 로그용으로 두는 자리라 재부팅·청소에도
+# 남고, 저장소 안에 두는 것과 달리 .gitignore 항목도 체크아웃마다 따로 쌓이는
+# 사본도 필요 없다. MODEL_LOG 로 어디로든 옮기는 통로는 그대로다.
+LOG="${MODEL_LOG:-$HOME/Library/Logs/docs_rag/models.log}"
+LOG_MAX_BYTES="${MODEL_LOG_MAX_BYTES:-5242880}"  # 5MB
 
 model_up() { curl -sf -m 3 "http://127.0.0.1:$MODEL_PORT/health" >/dev/null 2>&1; }
+
+# 로그를 지우지 않고 이어 쓰므로(아래 start_models 참고) 상한이 필요하다.
+# 기동할 때 딱 한 번 크기를 보고, 넘었으면 한 세대($LOG.1)만 굴린다.
+# 실행 중에는 보지 않는다 — 한 번의 실행이 폭주하면 5MB 를 넘길 수 있다는
+# 뜻이고, 그건 감수한다. 로컬 편의 스크립트에 로테이션 감시자를 두는 건
+# 과하고, 실제로 새는 경로는 "기동을 반복하며 쌓이는" 쪽이지 "한 번에
+# 터지는" 쪽이 아니다. 세대를 하나만 두는 이유도 같다: 이어 쓰기라 직전
+# 기동의 로그는 보통 $LOG 안에 그대로 있고, $LOG.1 은 넘침 받이일 뿐이다.
+rotate_log() {
+    [ -f "$LOG" ] || return 0
+    local size
+    size=$(wc -c < "$LOG" | tr -d '[:space:]') || return 0
+    [ "${size:-0}" -ge "$LOG_MAX_BYTES" ] || return 0
+    # 회전이 실패해도 기동은 막지 않는다. set -e 아래라 여기서 죽으면 로그
+    # 파일 하나 때문에 스택 전체가 안 뜬다 — 상한은 기동보다 덜 중요하다.
+    mv -f "$LOG" "$LOG.1" || echo "  로그 회전 실패 — 그대로 이어 씀" >&2
+    return 0
+}
 
 start_models() {
     if model_up; then
         echo "모델 서버 이미 떠 있음 (:$MODEL_PORT)"
         return
     fi
+    mkdir -p "$(dirname "$LOG")"
+    rotate_log
     echo "모델 서버 기동 중 (MPS, 로그: $LOG)"
+    # `>` 가 아니라 `>>` 다. 예전엔 기동할 때마다 truncate 해서, 서버가 죽어
+    # 다시 띄우는 순간 죽은 이유가 같이 사라졌다 — 사후분석이 필요한 바로 그
+    # 시점에. 아래 실패 안내가 가리키는 파일도 이 파일이다. ee4518c 가
+    # "모델 서버가 액세스 로그를 찍지 않아 요청이 도착했는지조차 알 수
+    # 없었다"를 고치려고 이 로그를 살려놨는데, 재기동이 그걸 매번 지웠다.
+    # 이어 붙는 만큼 실행 경계가 안 보이므로 기동마다 구분선을 하나 넣는다.
+    printf '\n===== %s  모델 서버 기동 (:%s) =====\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "$MODEL_PORT" >> "$LOG"
     PYTHONUNBUFFERED=1 nohup "$PY" -m scripts.local_model_server \
-        --port "$MODEL_PORT" > "$LOG" 2>&1 &
+        --port "$MODEL_PORT" >> "$LOG" 2>&1 &
     # 캐시된 가중치로도 로드에 15초 안팎 걸린다.
     for _ in $(seq 1 60); do
         model_up && { echo "  준비됨"; return; }
         sleep 2
     done
-    echo "모델 서버가 뜨지 않음 — $LOG 확인" >&2
+    # 파일에 과거 기동까지 남아 있으니 "확인" 이 아니라 끝부분을 짚어준다.
+    echo "모델 서버가 뜨지 않음 — tail -n 50 $LOG" >&2
     exit 1
 }
 
