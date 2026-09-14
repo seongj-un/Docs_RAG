@@ -18,12 +18,27 @@ from app.models import Base
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
-if config.config_file_name is not None:
-    # disable_existing_loggers defaults to True, which would silence every
-    # logger created before this call. The app runs migrations inside its
-    # lifespan, so that default wiped uvicorn's loggers on startup: no access
-    # log, and 500s returned a bare "Internal Server Error" with the traceback
-    # thrown away.
+# Only the command line gets its logging from the ini. `alembic upgrade head`
+# at a terminal has nobody else to configure it, so it still reads alembic.ini
+# as before; the app sets configure_logger=False (app/db.py) because it has
+# already installed its own handler, format and level (app/logging.py) by the
+# time it runs migrations.
+#
+# Without that gate this call owns the logging of a running API server, which
+# is how 3988fc9 happened: disable_existing_loggers defaults to True, so the
+# startup migration silenced uvicorn's loggers wholesale -- no access log, and
+# 500s came back as a bare "Internal Server Error" with the traceback thrown
+# away, for six milestones. The keyword below fixed that symptom and stays
+# (the CLI path should not disable anything either), but the symptom was never
+# the only one available: fileConfig additionally flushes and closes every
+# handler alive in the process. Today that happens to be survivable only
+# because uvicorn's handlers are StreamHandlers, whose close() leaves the
+# stream open. Point one file handler anywhere and startup would silently
+# destroy it.
+if (
+    config.attributes.get("configure_logger", True)
+    and config.config_file_name is not None
+):
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata

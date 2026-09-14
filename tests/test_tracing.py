@@ -255,6 +255,12 @@ def test_unknown_or_foreign_document_scope_is_404(monkeypatch):
 
     Regression guard: the semantic cache has an FK on document_id, so an
     unvalidated scope used to surface as a 500 from a foreign-key violation.
+
+    This used to assert that **no** trace was written, as proof that nothing
+    ran. That proof has moved: failed queries are recorded now, so the claim
+    is made by the shape of the row instead — a 404 with no answer, no tokens
+    and no retrieval stages is a request that was rejected before it did any
+    work, and it is still distinguishable from the 500 this guards against.
     """
     candidates = [_chunk("c0")]
     _stub_pipeline(monkeypatch, candidates, ranked=[(0, 1.0)])
@@ -269,14 +275,20 @@ def test_unknown_or_foreign_document_scope_is_404(monkeypatch):
             resp = await client.post(
                 "/query", json={"question": "q", "document_id": str(uuid.uuid4())}
             )
-            traces = await client.get("/traces")
-            out = (resp.status_code, len(traces.json()))
+            traces = (await client.get("/traces")).json()
+            out = (resp.status_code, traces)
         await _drop_user(email)
         return out
 
-    status, trace_count = run_async(scenario)
+    status, traces = run_async(scenario)
     assert status == 404
-    assert trace_count == 0  # rejected before any work was done
+    assert len(traces) == 1
+    recorded = traces[0]
+    assert recorded["status_code"] == 404
+    assert recorded["error"] == "not found"
+    # Nothing ran: no answer, no spend, and no retrieval stage reached.
+    assert recorded["tokens_in"] == 0 and recorded["tokens_out"] == 0
+    assert recorded["embed_ms"] is None
 
 
 def test_trace_survives_deletion_of_its_document(monkeypatch):
@@ -326,7 +338,7 @@ def test_trace_survives_deletion_of_its_document(monkeypatch):
     assert recorded_doc == doc_id  # id retained even though the row is gone
 
 
-# --- traces.source: 어느 소비자가 남긴 행인가 (마이그레이션 0011) ----------
+# --- traces.source: 어느 소비자가 남긴 행인가 (마이그레이션 0012) ----------
 
 
 def test_each_consumer_records_its_own_source(monkeypatch):
@@ -400,7 +412,7 @@ def test_each_consumer_records_its_own_source(monkeypatch):
 def test_unknown_source_is_refused_before_anything_runs():
     """오타가 조용히 새 소스를 만들지 못하게 하는 앱 쪽 잠금.
 
-    스키마의 CHECK 제약이 DB 쪽 잠금이고(마이그레이션 0011), 이쪽은 그보다
+    스키마의 CHECK 제약이 DB 쪽 잠금이고(마이그레이션 0012), 이쪽은 그보다
     먼저 터져서 **트레이스가 조용히 사라지는 것**까지 막는다 — tracing.record
     는 자기 예외를 삼키므로, CHECK 에만 기대면 잘못된 source 는 예외가 아니라
     "기록되지 않은 질의"로 나타난다.
@@ -449,7 +461,7 @@ def test_schema_check_constraint_matches_the_python_source_list():
             ).scalar_one_or_none()
 
     definition = run_async(scenario)
-    assert definition is not None, "0011 의 CHECK 제약이 없다 — 마이그레이션 미적용?"
+    assert definition is not None, "0012 의 CHECK 제약이 없다 — 마이그레이션 미적용?"
 
     for source in tracing.TRACE_SOURCES:
         assert f"'{source}'" in definition, f"{source} 가 스키마 CHECK 에 없다"
@@ -465,7 +477,7 @@ def test_schema_check_constraint_matches_the_python_source_list():
 def test_cache_hit_keeps_its_source_though_it_records_no_model(monkeypatch):
     """캐시 히트는 llm_model 을 남기지 않는다 — 그래도 source 는 정확하다.
 
-    이 테스트는 마이그레이션 0011 이 **왜** 필요했는지를 고정한다. W2 는 MCP
+    이 테스트는 마이그레이션 0012 이 **왜** 필요했는지를 고정한다. W2 는 MCP
     트레이스를 ``llm_model IS NULL`` 로 골랐고, 근거는 "생성 경로는 항상
     llm_model 을 채운다"였다. 그 근거가 틀렸다: 시맨틱 캐시에 맞은 요청은
     ``finalize`` 가 아니라 ``record_cache_hit`` 으로 끝나고, 그쪽은

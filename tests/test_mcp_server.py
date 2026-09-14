@@ -658,7 +658,7 @@ def test_search_is_traced_for_w4_l3_metrics():
     assert row["retrieve_ms"] is not None
 
     # W4/W5 가 에이전트 트래픽을 고르는 조건절. 이제 **선언된 표식**이다
-    # (마이그레이션 0011) — 생성 없는 네 번째 소비자가 생겨도 그 소비자는
+    # (마이그레이션 0012) — 생성 없는 네 번째 소비자가 생겨도 그 소비자는
     # 자기 source 를 갖게 되므로 이 단언은 그대로 참이다. 예전의 파생 표식
     # (llm_model IS NULL)은 바로 그 상황에서 조용히 거짓이 됐을 것이다.
     assert row["source"] == SOURCE_MCP_SEARCH

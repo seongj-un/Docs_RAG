@@ -1,6 +1,6 @@
 """M7 W3 proofs: an eval run survives a round trip through Postgres.
 
-Requires Postgres (migration 0010). No embedding or rerank server is involved —
+Requires Postgres (migration 0011). No embedding or rerank server is involved —
 what is under test is the storage and the reference resolution that the diff
 report stands on, not the retrieval quality that fills it.
 """

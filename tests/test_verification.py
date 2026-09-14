@@ -263,17 +263,61 @@ def test_link_points_at_the_frontend_not_the_api():
     link = verification.build_link("abc123")
 
     assert link.startswith(settings.app_base_url)
-    assert "/verify?token=abc123" in link
+    assert "/verify#token=abc123" in link
+
+
+def test_the_token_never_rides_in_the_query_string():
+    """토큰은 프래그먼트에만 있어야 한다 — 프래그먼트는 서버로 안 간다.
+
+    쿼리스트링에 실으면 사용자가 링크를 여는 순간 토큰이 요청줄째로 프록시
+    액세스 로그에 적히고, 브라우저 히스토리에 남고, Caddy 앞에 CDN 을 두면
+    그쪽 로그에도 남는다. Caddyfile 의 리댁션은 방어 계층이지 근본 수정이
+    아니다 — 설정 한 줄이면 되돌아온다. 그래서 링크 형식 자체를 고정한다.
+
+    ``"?" not in link`` 까지 보는 것은 의도된 것이다. ``#token=`` 만 검사하면
+    ``/verify?token=X#token=X`` 같은 "둘 다 붙이는" 절충안이 통과하는데,
+    그건 유출 경로를 그대로 둔 채 프래그먼트만 얹은 것이라 이 변경의 요점을
+    통째로 잃는다.
+    """
+    from urllib.parse import urlsplit
+
+    from app.services import verification
+
+    link = verification.build_link("SECRET-TOKEN-VALUE")
+    parts = urlsplit(link)
+
+    assert parts.fragment == "token=SECRET-TOKEN-VALUE"
+    assert parts.path.endswith("/verify")
+    assert parts.query == ""
+    assert "?" not in link
+    assert "SECRET-TOKEN-VALUE" not in link.split("#", 1)[0]
 
 
 def test_email_body_carries_the_link_in_both_parts():
     from app.services import verification
 
-    subject, html, plain = verification.build_email("https://example.test/verify?token=x")
+    subject, html, plain = verification.build_email("https://example.test/verify#token=x")
 
     assert subject
-    assert "https://example.test/verify?token=x" in html
-    assert "https://example.test/verify?token=x" in plain
+    assert "https://example.test/verify#token=x" in html
+    assert "https://example.test/verify#token=x" in plain
+
+
+def test_the_html_body_keeps_the_fragment_intact():
+    """href 안의 ``#`` 가 이스케이프되거나 잘리면 링크가 통째로 죽는다.
+
+    평문 본문은 눈으로 봐도 알지만 HTML 은 그렇지 않다 — 속성값이 조금만
+    달라져도 클릭은 ``/verify`` 로만 가고 토큰은 사라진 채 "링크가 올바르지
+    않습니다"가 뜬다. 토큰이 주소의 **뒤쪽**으로 옮겨간 지금은 잘림이 곧
+    토큰 유실이라, 이 검사가 전보다 값을 한다.
+    """
+    from app.services import verification
+
+    link = verification.build_link("frag-me")
+    _subject, html, _plain = verification.build_email(link)
+
+    assert f'href="{link}"' in html
+    assert "#token=frag-me" in html
 
 
 # --- 경쟁 조건: consume_token 은 원자적 클레임이어야 한다 ---

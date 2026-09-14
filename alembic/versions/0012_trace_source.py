@@ -1,7 +1,7 @@
 """traces 에 source 를 추가한다 — 어느 소비자가 남긴 트레이스인가
 
-Revision ID: 0011
-Revises: 0010
+Revision ID: 0012
+Revises: 0011
 Create Date: 2026-09-14
 
 M7 W2 가 MCP ``search_documents`` 툴을 붙이면서 ``traces`` 의 소비자가 셋이
@@ -62,8 +62,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0011"
-down_revision: Union[str, None] = "0010"
+revision: str = "0012"
+down_revision: Union[str, None] = "0011"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

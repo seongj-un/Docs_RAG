@@ -6,6 +6,11 @@ Triad reasoning in the M4 spec only works if the stages are separable after the
 fact: whether the right chunk was never retrieved, or was retrieved and then
 reranked away, is invisible from the answer alone.
 
+Failures are traced too, and for the same reason: a query that ended in a 503
+is the one an operator most needs to find later. Recording only the successes
+made the table lie in the one direction that matters — during an embedding
+outage ``/admin/stats`` showed *fewer* queries, not more.
+
 Tracing is best-effort. A failure to record must never fail the user's query,
 so ``record`` swallows its own errors and reports them to the log instead.
 
@@ -17,13 +22,16 @@ spans (``app/services/otel.py``). The two are not redundant. These rows are the
 stage timings are shared because measuring them twice would let them disagree.
 """
 
+import asyncio
 import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.logging import NO_REQUEST_ID, request_id
 from app.models import Trace, TraceChunk
 from app.services import otel
 from app.services.retrieve import RetrievedChunk
@@ -36,7 +44,7 @@ STAGE_SPARSE = "sparse"
 STAGE_RRF = "rrf"
 STAGE_RERANK = "rerank"
 
-# 트레이스를 남긴 소비자. 스키마의 CHECK 제약(마이그레이션 0011)이 같은 목록을
+# 트레이스를 남긴 소비자. 스키마의 CHECK 제약(마이그레이션 0012)이 같은 목록을
 # 들고 있으므로, 여기에 값을 더하려면 마이그레이션도 함께 가야 한다 — 그
 # 번거로움이 의도다. 소스를 늘리는 것은 검토를 거친 결정이어야 하고, 오타가
 # 조용히 새 소스를 만들어내면("mcp_serach") 이 컬럼의 존재 이유가 사라진다.
@@ -48,14 +56,14 @@ STAGE_RERANK = "rerank"
 SOURCE_QUERY = "query"                # POST /query
 SOURCE_CONVERSATION = "conversation"  # POST /conversations/{id}/query
 SOURCE_MCP_SEARCH = "mcp_search"      # MCP search_documents (에이전트가 생성)
-# MCP answer_question (M7 W6). 0011 이 "W6 가 서버 생성 MCP 툴을 만들면 붙을
-# 자리"라고 미리 적어 둔 값이 이것이고, 마이그레이션 0015 가 CHECK 제약에
+# MCP answer_question (M7 W6). 0012 가 "W6 가 서버 생성 MCP 툴을 만들면 붙을
+# 자리"라고 미리 적어 둔 값이 이것이고, 마이그레이션 0014 가 CHECK 제약에
 # 같은 값을 더한다. 이 값이 W6 의 비교축을 **사후에 복원 가능하게** 만드는
 # 유일한 장치다: mcp_search 와 mcp_answer 는 둘 다 에이전트가 부른 것이지만
 # 생성이 서버에서 일어났는지 호출자에서 일어났는지가 정확히 여기서 갈린다.
 # 리포트의 표가 사라져도 이 컬럼이 남아 있으면 같은 비교를 다시 낼 수 있다.
 SOURCE_MCP_ANSWER = "mcp_answer"      # MCP answer_question (서버가 생성)
-# 0011 이전에 쌓인 행. 서버 생성인 것은 확실하지만 둘 중 어느 엔드포인트였는지는
+# 0012 이전에 쌓인 행. 서버 생성인 것은 확실하지만 둘 중 어느 엔드포인트였는지는
 # 복원할 수 없어서(traces 에 conversation_id 가 없다) 모른다고 적은 값이다.
 # 앱은 이 값을 절대 쓰지 않는다 — 마이그레이션의 백필에만 존재한다.
 SOURCE_LEGACY = "legacy"
@@ -78,6 +86,56 @@ MCP_SOURCES = frozenset({SOURCE_MCP_SEARCH, SOURCE_MCP_ANSWER})
 SERVER_GENERATED_SOURCES = frozenset(
     {SOURCE_QUERY, SOURCE_CONVERSATION, SOURCE_MCP_ANSWER}
 )
+
+# nginx's convention for "the client hung up before we answered". Not a real
+# HTTP status — nothing is ever sent with it — but this column is read by an
+# operator scanning for trouble, and a disconnect filed as 500 would send them
+# hunting a server fault that never happened.
+CLIENT_CLOSED_REQUEST = 499
+
+# ``error`` is grouped in the stats report, so it has to stay short and
+# bounded. ``HTTPException.detail`` is typed ``Any`` and can be a dict, so a
+# cap is not theoretical.
+REASON_MAX = 200
+
+
+@dataclass(frozen=True)
+class Failure:
+    """How a request ended, in the two fields ``traces`` stores."""
+
+    status_code: int
+    reason: str
+
+
+def describe_failure(exc: BaseException) -> Failure:
+    """Classify an exception into what is safe and useful to persist.
+
+    The message of an unexpected exception is **not** kept. It is the part
+    that carries the user's question, a file path, or an upstream response
+    body, and it is also the part already written to the app log in full —
+    where ``request_id`` now leads. What the database gets is the class name,
+    which is what makes "eleven OperationalError" a readable line in a report.
+    """
+    if isinstance(exc, HTTPException):
+        # The detail is what the caller already received in the response body,
+        # so storing it leaks nothing new and groups well: these are a handful
+        # of fixed phrases ("search unavailable", "not found").
+        return Failure(exc.status_code, str(exc.detail)[:REASON_MAX])
+    if isinstance(exc, asyncio.CancelledError):
+        return Failure(CLIENT_CLOSED_REQUEST, "client disconnected")
+    return Failure(500, type(exc).__name__[:REASON_MAX])
+
+
+def current_request_id() -> str | None:
+    """This request's id, or None outside a request.
+
+    ``NO_REQUEST_ID`` ("-") is a *log* convention — it keeps a fixed-width
+    column filled for startup and background lines. Writing it into a column
+    would invent a row that matches ``WHERE request_id = '-'``, which is a
+    bucket of unrelated requests rather than an answer.
+    """
+    current = request_id.get()
+    return None if current == NO_REQUEST_ID else current
 
 
 class Stopwatch:
@@ -153,6 +211,13 @@ class TraceDraft:
     # 단계에서, top_k 는 그 시점 설정에서 이미 복원되기 때문이다.
     top_k: int | None = None
     chunk_count: int = 0
+    # Read once, when the draft is created, rather than at write time: the row
+    # is written from an exception handler or from inside a streaming
+    # generator, and the id has to be the one this request started with.
+    request_id: str | None = field(default_factory=current_request_id)
+    # Both stay None on a request that answered. See Trace.status_code.
+    status_code: int | None = None
+    error: str | None = None
     # stage -> ordered chunk ids (dense/sparse), or ordered chunks (rrf/rerank)
     stage_ids: dict[str, list[uuid.UUID]] = field(default_factory=dict)
     stage_chunks: dict[str, list[RetrievedChunk]] = field(default_factory=dict)
@@ -180,10 +245,36 @@ def _chunk_rows(trace_id: uuid.UUID, draft: TraceDraft) -> list[TraceChunk]:
     return rows
 
 
+async def _rollback_quietly(session: AsyncSession) -> None:
+    """Undo the half-written transaction without becoming the error itself.
+
+    ``session.rollback()`` used to sit bare inside ``record``'s handler, so a
+    rollback that threw (a connection already gone is the usual way) escaped
+    the one function in this file that promises never to raise — turning a
+    failed *trace* into a failed *query*. Same lesson ``_discard_unanswered``
+    in routers/conversations.py wrote down: cleanup must never replace the
+    error that caused it.
+
+    ``except Exception``, not ``BaseException``: a cancellation arriving
+    during the rollback still has to propagate, because the task it belongs
+    to is being torn down either way.
+    """
+    try:
+        await session.rollback()
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to roll back after a tracing failure")
+
+
 async def record(
     session: AsyncSession, draft: TraceDraft, watch: Stopwatch
 ) -> uuid.UUID | None:
-    """Persist a trace. Returns its id, or None if recording failed."""
+    """Persist a trace. Returns its id, or None if recording failed.
+
+    Callers reach this from failure handlers, where the session may already be
+    sitting on a transaction the original error aborted. That is what the
+    handlers below are for: this returns None rather than adding a second
+    exception on top of the first.
+    """
     # 스팬 속성을 DB 쓰기 **전에** 찍는다. 기록이 실패해도(아래 except) 운영자
     # 쪽 증거는 남아야 하고, 무엇보다 이 함수가 소비자마다 정확히 한 번 불리는
     # 유일한 지점이라 "요청당 한 번"이 여기서 공짜로 보장된다.
@@ -221,6 +312,9 @@ async def record(
             rerank_ms=watch.stages.get("rerank"),
             generate_ms=watch.stages.get("generate"),
             total_ms=watch.total_ms(),
+            request_id=draft.request_id,
+            status_code=draft.status_code,
+            error=draft.error,
         )
         session.add(trace)
         await session.flush()  # assign trace.id before children reference it
@@ -230,5 +324,15 @@ async def record(
     except Exception:
         # Observability must never take down the thing it observes.
         logger.exception("failed to record trace")
-        await session.rollback()
+        await _rollback_quietly(session)
         return None
+    except BaseException:
+        # CancelledError is a BaseException, so the clause above never saw it:
+        # a client hanging up mid-write left this session holding an open
+        # transaction, which the next user of the session inherits. Cleaned up
+        # here — but re-raised, never swallowed. Eating a cancellation would
+        # make a torn-down request look like one that completed, and the
+        # promise this module makes is "don't break the query", not "pretend
+        # the query is still alive".
+        await _rollback_quietly(session)
+        raise

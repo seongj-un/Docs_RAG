@@ -2,9 +2,17 @@
 
 M4 chose Postgres tracing over Langfuse because a six-container observability
 stack was out of proportion to this project. The same reasoning applies to the
-dashboard: ``traces`` and ``usage_events`` already hold every number the M6
+dashboard: ``traces`` and ``documents`` already hold every number the M6
 completion criteria ask for, so what was missing was a way to read them — not
 another pipeline to collect them.
+
+This used to name ``usage_events`` instead of ``documents``, which was simply
+wrong: nothing here has ever read that table — the imports are ``Document``
+and ``Trace``, and so is every query below. It mattered because the sentence
+was also the argument for *not* building a collection pipeline, and an
+argument that cites a table the code never opens is one nobody can check. The
+spend numbers this reports come from ``traces.tokens_*``; ``usage_events`` is
+the quota ledger, and it is ``/usage`` that reads it.
 
 Access is a shared token from ``ADMIN_TOKEN``, and the route is **404 when the
 token is unset**. A 401 would confirm the endpoint exists on every deployment
@@ -88,20 +96,34 @@ async def stats(
                 func.count(),
                 func.count().filter(Trace.cached.is_(True)),
                 func.count().filter(Trace.refused.is_(True)),
+                # A failed query is one that never answered, and it is the
+                # only thing in this report that rises during an outage —
+                # everything else falls, which is what made an outage read as
+                # an idle hour back when failures were not recorded at all.
+                func.count().filter(Trace.status_code.isnot(None)),
                 func.coalesce(func.sum(Trace.tokens_in), 0),
                 func.coalesce(func.sum(Trace.tokens_out), 0),
             ).where(recent)
         )
     ).one()
-    total, cached, refused, tokens_in, tokens_out = counts
+    total, cached, refused, failed, tokens_in, tokens_out = counts
 
+    # Latency is measured over requests that answered. A failure has a
+    # duration too, but it is not the same quantity: a refused connection to
+    # a dead embedder returns in single-digit milliseconds, so folding those
+    # in would make p50 *improve* during an outage — the second way this
+    # report used to describe a broken hour as a healthy one. Failures are
+    # counted above and named below instead. Same reasoning as the cache-hit
+    # exclusion right after this.
+    answered = recent & Trace.status_code.is_(None)
     overall = (
-        await session.execute(select(*_percentiles(Trace.total_ms)).where(recent))
+        await session.execute(select(*_percentiles(Trace.total_ms)).where(answered))
     ).one()
 
     # 소비자별 호출 수. MCP 에이전트는 사람보다 훨씬 자주 부르므로, 합계만
     # 보면 질의가 늘어난 것인지 에이전트 하나가 루프를 돈 것인지 구별되지
-    # 않는다 — W4 의 L3 "호출 수"가 이 숫자다.
+    # 않는다 — W4 의 L3 "호출 수"가 이 숫자다. 실패한 질의도 센다: 어느
+    # 소비자가 장애를 맞고 있는지가 곧 이 숫자가 답해야 하는 질문이다.
     by_source = dict(
         (
             await session.execute(
@@ -113,18 +135,28 @@ async def stats(
         ).all()
     )
 
-    # Cache hits skip embedding, reranking and generation, so including them
-    # would report stage latencies the uncached path never sees.
-    live = recent & Trace.cached.is_(False)
+    # Cache hits used to be excluded here, on the premise that they skip every
+    # stage. They do not: the cache is *semantic*, so the question has to be
+    # embedded before it can be looked up (``pipeline.embed`` runs, then
+    # ``cache.lookup`` takes that vector). A hit therefore carries a real
+    # ``embed_ms`` and nothing else -- the other three timers never open, and
+    # ``percentile_cont`` skips their NULLs on its own. So the filter's only
+    # effect was to throw away genuine embedding measurements, and to do it
+    # exactly where there are most of them: the better the cache works, the
+    # thinner the embed sample got. The premise was written in four places at
+    # once -- here, the schema, the README and this test's fixture -- which is
+    # why agreeing with itself kept it alive for so long.
     stage_columns = []
     for stage in STAGES:
         stage_columns.extend(_percentiles(getattr(Trace, f"{stage}_ms")))
-    stage_row = (await session.execute(select(*stage_columns).where(live))).one()
+    stage_row = (await session.execute(select(*stage_columns).where(answered))).one()
     stages = {
         stage: _pair(stage_row[i * 2], stage_row[i * 2 + 1])
         for i, stage in enumerate(STAGES)
     }
 
+    # Not filtered by the window, on purpose — see DocumentStats. This is the
+    # state of the corpus now; every other number here is an event count.
     by_status = (
         await session.execute(
             select(Document.status, func.count()).group_by(Document.status)
@@ -139,8 +171,34 @@ async def stats(
     failures = (
         await session.execute(
             select(reason, func.count())
-            .where(Document.status == "failed", Document.error.isnot(None))
+            .where(
+                Document.status == "failed",
+                Document.error.isnot(None),
+                # This list ignored the window entirely, so ``hours=1`` served
+                # up indexing failures from months ago under a response whose
+                # first field reads ``window_hours: 1`` — an operator checking
+                # whether a deploy broke ingestion saw a wall of old failures
+                # and had no way to tell they were old. ``updated_at``, not
+                # ``created_at``: the row is stamped when the status becomes
+                # ``failed`` (services/ingest.py), so it is the instant the
+                # failure happened rather than the instant the file arrived,
+                # and for a document that sat in the queue those differ.
+                Document.updated_at >= since,
+            )
             .group_by(reason)
+            .order_by(func.count().desc())
+            .limit(10)
+        )
+    ).all()
+
+    # Grouped by status *and* reason rather than either alone: "503 search
+    # unavailable" and "404 not found" are one operator action apart, and the
+    # status by itself does not say which 503 it was.
+    query_failures = (
+        await session.execute(
+            select(Trace.status_code, Trace.error, func.count())
+            .where(recent, Trace.status_code.isnot(None))
+            .group_by(Trace.status_code, Trace.error)
             .order_by(func.count().desc())
             .limit(10)
         )
@@ -148,7 +206,9 @@ async def stats(
 
     return AdminStats(
         window_hours=hours,
-        queries=QueryStats(total=total, cached=cached, refused=refused),
+        queries=QueryStats(
+            total=total, cached=cached, refused=refused, failed=failed
+        ),
         by_source=by_source,
         total_ms=_pair(*overall),
         stages=stages,
@@ -156,4 +216,13 @@ async def stats(
         tokens_out=tokens_out,
         documents=documents,
         failures=[FailureReason(reason=r, count=n) for r, n in failures],
+        query_failures=[
+            FailureReason(
+                # The reason is written, never NULL — but this report must not
+                # be the place that finds out otherwise.
+                reason=f"{status} {error}" if error else str(status),
+                count=n,
+            )
+            for status, error, n in query_failures
+        ],
     )

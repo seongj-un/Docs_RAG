@@ -649,7 +649,7 @@ async def _server_tokens(since: datetime) -> tuple[int, int]:
 
     툴 응답에 실어 보내지 않는 이유: 그 필드는 에이전트가 읽는 프롬프트가 되고
     (``app/mcp/schemas.py`` 의 규칙), 우리 회계를 모델에게 읽힐 이유가 없다.
-    대신 ``traces`` 에서 읽는다 — 그러라고 0015 가 ``mcp_answer`` 를 만들었다.
+    대신 ``traces`` 에서 읽는다 — 그러라고 0014 가 ``mcp_answer`` 를 만들었다.
     이 조회 자체가 "리포트가 사라져도 DB 로 같은 비교를 되살릴 수 있다"는
     주장의 실행 가능한 증인이다.
 

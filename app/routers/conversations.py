@@ -290,13 +290,40 @@ async def _stream_turn(
             if runner is not None:
                 await runner.release_reservation()
             await _discard_unanswered(session, question_id)
+            await _record_failure(runner, exc)
             yield _sse("error", {"status": exc.status_code, "detail": exc.detail})
-        except Exception:  # noqa: BLE001 - the client needs *something*
+        except Exception as exc:  # noqa: BLE001 - the client needs *something*
             logger.exception("stream crashed for conversation %s", conversation_id)
             if runner is not None:
                 await runner.release_reservation()
             await _discard_unanswered(session, question_id)
+            await _record_failure(runner, exc)
             yield _sse("error", {"status": 500, "detail": "internal error"})
+
+
+async def _record_failure(runner: QueryRunner | None, exc: BaseException) -> None:
+    """Leave a ``traces`` row for the turn that failed.
+
+    Last of the three cleanups, after the reservation and the orphan question,
+    for the reason ``QueryRunner.record_failure`` documents: those two are
+    correctness, this is observability, and observability does not get to push
+    correctness out of the way. Both of them also roll the session back on
+    their way through, which is what leaves a usable transaction here.
+
+    Before the ``error`` frame, though, and that ordering is deliberate: the
+    row is what survives a client that has already gone, and the frame is not
+    — the generator is closed at its next ``yield`` when nobody is listening.
+    Recording cannot eat the frame in practice, because it swallows its own
+    errors; only a cancellation gets through, and by then there is no client
+    left to receive anything.
+
+    ``runner is None`` means the turn failed before there was a query to run
+    at all (a conversation the caller does not own), which is a request that
+    was never admitted — the same line ``record_failure`` draws.
+    """
+    if runner is None:
+        return
+    await runner.record_failure(exc)
 
 
 async def _discard_unanswered(session: AsyncSession, question_id) -> None:

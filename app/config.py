@@ -16,6 +16,20 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/docs_rag"
 
+    # Logging. 루트 로거 레벨이고, 실제 설정은 app/logging.py 가 한다.
+    # 기본을 WARNING 으로 두는 이유: 이 값이 생기기 전까지 앱의 루트 레벨을
+    # 실제로 정한 것은 alembic.ini 의 [logger_root] 였고 그 값이 WARNING
+    # 이었다. 앱이 로깅을 넘겨받으면서 기본 레벨까지 같이 바꾸면, 이번
+    # 변경이 실제로 뭘 고쳤는지가 쏟아지는 INFO 에 묻힌다. 앱 자신의 로그는
+    # WARNING/exception 아홉 군데뿐이라 올려서 얻을 것도 지금은 없다.
+    # 조사할 일이 생기면 LOG_LEVEL=INFO 로 한 판 돌려도 된다. SQL 이 쏟아질
+    # 걱정은 안 해도 된다 — SQLAlchemy 가 import 시점에 자기 "sqlalchemy"
+    # 로거를 WARNING 으로 못박으므로(sqlalchemy/log.py) 엔진 로거는 루트
+    # 레벨을 물려받지 않는다. 실측으로 확인했다. SQL 을 정말로 보려면
+    # app/db.py 의 엔진에 echo=True 를 주는 쪽이고, 그건 명시적 선택이다
+    # (바인딩 값에 질문·답변이 실린다는 점은 그때 감수하는 것이다).
+    log_level: str = "WARNING"
+
     # Embedding (BGE-M3 via TEI)
     embed_provider: str = "local"
     embed_model: str = "BAAI/bge-m3"

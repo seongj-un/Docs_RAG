@@ -332,7 +332,7 @@ async def _run_answer(
             question,
             document_id=document_id,
             hybrid=None,
-            # 0011 이 예고한 값. mcp_search 와 갈라 두는 것이 W6 의 비교축을
+            # 0012 가 예고한 값. mcp_search 와 갈라 두는 것이 W6 의 비교축을
             # 트레이스만으로 되살릴 수 있게 하는 유일한 장치다.
             source=SOURCE_MCP_ANSWER,
         )

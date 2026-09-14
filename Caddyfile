@@ -9,17 +9,177 @@
 # Caddy 가 인증서를 자동 발급한다. 기본값은 docker-compose.yml 에만 둔다 —
 # **비어 있게 설정된** 환경변수는 Caddyfile 기본값을 이기고 주소 없는
 # 블록을 만들어, Caddy 가 이를 떠도는 global 블록으로 읽고 기동에 실패한다.
+
+# 이메일 인증 토큰이 로그에 평문으로 남지 않게 하는 필터. 지금은 **2차
+# 방어선**이다 — 이 문단은 그 사실을 알고 다시 쓴 것이다.
+#
+# 이 필터를 넣을 때의 전제는 "인증 링크가 /verify?token=<원문> 이라 사용자가
+# 링크를 누르는 순간 토큰이 요청 URI 에 실려 여기를 지나간다"였다. 그 전제가
+# 방금 바뀌었다: app/services/verification.py 의 build_link 가 토큰을
+# 쿼리스트링에서 **URL 프래그먼트**(/verify#token=<원문>)로 옮겼다.
+# 프래그먼트는 브라우저가 서버로 보내지 않는다(RFC 3986 §3.5). 원시 TCP 로
+# 확인했다 — 서버가 받는 요청줄은 `GET /verify` 뿐이고, 이어지는 동일 출처
+# 하위 요청의 Referer 에도 토큰이 없다. 즉 아래 두 필터가 막던 갈래는
+# **새 링크에서는 애초에 비어 있다.**
+#
+# 그래도 계속 지운다 — 필터는 남긴다. 위치가 바뀐 게 아니라 역할이 1차에서 2차로 내려왔을 뿐이다:
+#   - 형식을 바꾸기 전에 발송된 ?token= 링크가 TTL(VERIFY_TOKEN_TTL_HOURS,
+#     24시간) 동안 그대로 살아 있다.
+#   - 프론트가 그 레거시 링크를 하위 호환으로 계속 받아준다
+#     (web/lib/verifyLink.ts — 프래그먼트를 먼저 보고 없을 때만 쿼리를 본다).
+#   - 누가 링크 형식을 되돌리면 유출은 그날로 재발하는데, 설정에서 이미
+#     사라진 방어는 그때 아무도 다시 떠올리지 못한다.
+#
+# 무엇을 잃는지는 그대로다. DB 에는 sha256 해시만 두고 "DB 가 통째로 새도
+# 링크는 만들 수 없다"고 해둔 설계(app/models.py EmailVerificationToken)가
+# 프록시 로그 한 줄로 무너진다 — 이 로그를 읽을 수 있으면 남의 계정을
+# 인증할 수 있다. 메일 제공자가 무엇이든 항상 일어난다.
+#
+# Referer 도 같이 지운다. 이 파일이 프론트와 API 를 한 오리진으로 합쳤기
+# 때문에 /verify 페이지가 치는 POST /api/auth/verify 도, 그 페이지가 불러오는
+# 정적 자원도 전부 동일 출처 요청이고, 브라우저 기본 referrer policy
+# (strict-origin-when-cross-origin)는 동일 출처에는 쿼리스트링까지 붙은 전체
+# URL 을 보낸다. caddy:2-alpine 에 요청을 직접 넣어 확인했다: URI 만 막으면
+# 같은 줄의 headers.Referer 에 토큰이 그대로 남고, 클릭 한 번에 한 줄이
+# 아니라 페이지가 부르는 요청 수만큼 남는다. 레거시 링크를 연 사용자에게는
+# 이 경로가 지금도 그대로 열려 있다.
+#
+# 쿼리스트링을 통째로 날리지 않고 token 만 바꾼다. 이 로그의 존재 이유가
+# "무엇을"인데 limit·hours 같은 멀쩡한 파라미터까지 지우면 남는 게 없다.
+# delete 가 아니라 replace 인 것도 같은 이유다 — token=REDACTED 가 남아야
+# "인증 링크를 눌렀다"와 "그냥 /verify 를 열었다"를 구분할 수 있고, 사고
+# 대응 때 필요한 것이 바로 그 구분이다.
+(redact_verify_token) {
+	format filter {
+		fields {
+			request>uri query {
+				replace token REDACTED
+			}
+			request>headers>Referer query {
+				replace token REDACTED
+			}
+		}
+	}
+}
+
 {
 	admin off
+
+	# 기본 로거에도 같은 필터를 건다. 사이트 블록의 log(접근 로그)와는 **다른
+	# 로거**라 거기 설정이 여기까지 오지 않는다: reverse_proxy 가 업스트림에
+	# 못 붙으면(web 재배포 중 재시작 같은 흔한 일) Caddy 가 502 를 내면서
+	# http.log.error 에 요청 URI 와 헤더를 통째로 적는데, 그 로거는 기본 로거로
+	# 나간다. 실제로 업스트림을 죽여놓고 확인했다 — 접근 로그만 막았을 때
+	# 토큰은 오류 로그에 그대로 남아 있었다.
+	log {
+		import redact_verify_token
+	}
 }
 
 {$SITE_ADDRESS} {
 	encode zstd gzip
 
+	# 요청 상관 ID. 프록시 홉을 앱 로그와 잇는 곳이다.
+	#
+	# app/logging.py 의 RequestIdMiddleware 가 모든 앱 로그 줄의 [...] 칸에
+	# 상관 ID 를 찍는데, 그 ID 는 들어온 X-Request-Id 를 형식이 맞을 때만
+	# 이어받고 아니면 스스로 만든다. 프록시가 그 헤더를 넣지 않으면 앱은
+	# 매번 새로 만들고, 그 값은 프록시 쪽 어디에도 없다 — 502 가 났을 때
+	# "프록시 로그의 이 줄"과 "앱 로그의 저 줄"이 같은 요청인지 확인할
+	# 방법이 없다는 뜻이다.
+	#
+	# 그래서 두 가지를 같이 한다. 넘기기만 하면 앱 로그에는 ID 가 있는데
+	# 프록시 로그에는 없어서 여전히 못 잇는다:
+	#   request_header — 업스트림이 받을 값을 정한다.
+	#   log_append     — 그 값을 우리 액세스 로그에도 남긴다.
+	#
+	# 이 파일의 줄 순서는 실행 순서가 아니다. Caddy 는 지시자별 고정 순서로
+	# 정렬한다. caddy adapt 로 본 실제 순서는 vars -> log_append ->
+	# request_header -> encode -> handle 이다. log_append 가 request_header
+	# 보다 먼저인데도 **고쳐진** 값이 찍히는데, 값 전개가 로그를 쓰는 시점에
+	# 일어나기 때문이다: 클라이언트가 헤더를 안 보낸 요청의 request_id 에
+	# 우리가 만든 uuid 가 그대로 찍히는 것을 확인했다.
+	#
+	# 한계 하나(실측). log_append 는 **액세스 로그에만** 붙는다. 업스트림이
+	# 죽어 502 가 날 때 나가는 http.log.error 줄에는 request_id 도 uuid 도
+	# 없다 — 그 줄이 적는 것은 원본 요청뿐이라, 클라이언트가 ID 를 보낸
+	# 요청에서만 headers 칸에 X-Request-Id 가 보인다. 같은 요청의 액세스
+	# 로그 줄에는 502 여도 request_id 가 제대로 남으므로 (실측) 오류 줄은
+	# 시각·URI 로 그 줄에 붙여 읽어야 한다. 오류 로거에도 같은 칸을 붙이는
+	# 방법은 찾지 못했다 — **확인 필요**.
+	#
+	# 이어받기를 택한 이유. 덮어쓰기의 유일한 이득은 "로그 키를 클라이언트가
+	# 못 고른다"인데, 그 이득은 아래 vars 한 줄로 따로 확보된다: Caddy 는
+	# 액세스 로그에 최상위 `uuid` 를 찍고 그 값이 곧 {http.request.uuid} 라,
+	# 클라이언트가 손댈 수 없는 서버 쪽 키가 같은 줄에 늘 남는다. 그러니
+	# 덮어써서 클라이언트 추적을 끊는 대가를 치를 이유가 없다. 반대로
+	# 이어받으면 프론트가 사용자 동작 하나에 ID 하나를 붙여 여러 API
+	# 호출을 묶는 식이 나중에도 가능해진다(app/main.py 가 X-Request-Id 를
+	# expose_headers 에 넣어 실패 화면에 띄우려는 것과 같은 방향이다).
+	# 클라이언트가 같은 ID 를 여러 요청에 반복해 검색을 어지럽힐 수는
+	# 있지만 ID 는 권한이 아니라 검색 키일 뿐이고, 그때도 `uuid` 로 한
+	# 요청을 특정할 수 있다.
+	#
+	# vars 줄이 있는 이유(하마터면 놓칠 뻔했다): {http.request.uuid} 는
+	# **게으르게** 만들어진다. 한 번도 전개하지 않은 요청에는 UUID 자체가
+	# 생기지 않고 액세스 로그의 `uuid` 칸도 통째로 빠진다 — 실측으로
+	# 확인했다. 처음 쓴 설정은 request_header 안에서만 전개했는데, 그러면
+	# 클라이언트가 멀쩡한 ID 를 보낸 요청(=매처가 떨어져 request_header 가
+	# 안 도는 요청)에만 `uuid` 가 사라졌다. 바로 서버 쪽 키가 가장 필요한
+	# 경우다. vars 로 먼저 한 번 붙들어 두면 매처 결과와 무관하게 항상
+	# 생긴다. 로그에 같은 값을 한 칸 더 붙이는(log_append) 대신 vars 를
+	# 쓴 것은, 그 값을 아래 request_header 가 실제로 쓰기 때문이다 —
+	# 순수한 부작용용 한 줄이었다면 다음 사람이 지웠을 것이다.
+	#
+	# 검사식은 app/logging.py 의 _ACCEPTABLE_ID 와 **같은 알파벳**이다.
+	# 달라지면 앱이 버리고 새로 만드는 값을 프록시가 통과시켜, 정확히
+	# 이 블록이 막으려던 자리에서 사슬이 끊긴다. 한쪽을 고치면 양쪽을 고쳐라.
+	#
+	# header_regexp 가 아니라 expression 인 이유(실측): header_regexp 는
+	# 값이 여럿일 때 **하나라도** 맞으면 통과다. `X-Request-Id: bad one` 과
+	# `X-Request-Id: good-two` 를 같이 보내면 그대로 업스트림에 가고, 앱은
+	# 첫 값(`bad one`)을 보고 버린 뒤 자기 uuid 를 만든다. 반면
+	# {http.request.header.X-Request-Id} 는 중복을 쉼표로 이어 붙이므로
+	# (실측: `first-one,second-one`) 알파벳에 없는 쉼표 때문에 식이 떨어지고,
+	# request_header 의 set 이 값 목록을 통째로 하나로 갈아끼운다. 결과적으로
+	# 업스트림은 언제나 앱의 검사를 통과하는 값 하나만 받는다.
+	#
+	# 기각한 것들:
+	#   - reverse_proxy 안의 header_up: 업스트림에는 잘 가지만 액세스 로그는
+	#     **원본 요청**을 적는다(실측: 사이트 블록에서 request_header 로 넣은
+	#     헤더조차 로그의 request>headers 에 나타나지 않았다). 로그 쪽이 빈다.
+	#   - 로그의 request>headers>X-Request-Id 를 그대로 상관 키로 쓰기: 그 칸은
+	#     클라이언트가 보낸 **원본**이라 안 보냈으면 없고 깨졌으면 깨진 채다.
+	#     (남겨두는 것은 일부러다 — 클라이언트가 뭘 주장했는지 보려면 필요하다.)
+	#   - `request_header ?X-Request-Id ...` 로 "없을 때만" 넣기: 이 버전에서
+	#     설정 오류다. Caddy 가 "the default header modifier ('?') can only be
+	#     used on response headers; ... use matchers" 로 기동을 거부한다.
+	#     header_up ? 도 같다. 게다가 '없을 때만'은 깨진 값을 그대로 통과시켜
+	#     앱만 버리게 만드는, 가장 나쁜 쪽이었다.
+	#
+	# 리댁션과의 관계: format filter 는 fields 에 적힌 칸만 손대고 나머지는
+	# 그대로 내보내므로 uuid/request_id 는 필터를 통과한다(실측). 새 유출
+	# 경로도 아니다 — Caddy 는 원래 모든 요청 헤더를 적고 있었으므로
+	# 클라이언트가 보낸 X-Request-Id 는 이 블록 이전에도 로그에 있었다.
+	# 인증 토큰이 이 헤더에 실릴 경로는 없다(브라우저는 X-Request-Id 를
+	# 보내지 않는다). 제어문자로 로그를 위조하는 것도 막혀 있다: ESC·NUL 이
+	# 든 헤더는 Caddy 에 닿기 전에 Go 의 HTTP 서버가 400 으로 끊고, CRLF 는
+	# 값이 아니라 별개의 헤더가 되며, 따옴표는 JSON 인코더가 이스케이프한다
+	# (실측: `x","forged":"yes` -> `x\",\"forged\":\"yes`).
+	vars proxy_uuid {http.request.uuid}
+	@unusable_request_id not expression `{http.request.header.X-Request-Id}.matches("^[A-Za-z0-9._:@=+-]{1,64}$")`
+	request_header @unusable_request_id X-Request-Id {vars.proxy_uuid}
+	log_append request_id {http.request.header.X-Request-Id}
+
 	# 공개 호스트에서 사고 대응(누가·언제·무엇을) 때 쓸 접근 로그. 인자 없는
 	# log 는 stderr 로 나가므로 `docker compose logs proxy` 로 그대로 보인다
 	# — 별도 파일·로테이션 설정 없이 최소한의 관측성을 얻는다.
-	log
+	#
+	# 인자가 붙은 것은 그 "무엇을"에 이메일 인증 토큰이 섞여 들어오기
+	# 때문이다. 이유는 파일 맨 위 redact_verify_token 에 적었다.
+	log {
+		import redact_verify_token
+	}
 
 	# RFC 9728 메타데이터는 **호스트 루트**에 있어야 한다. 스펙이 경로를
 	# "/.well-known/oauth-protected-resource" + 리소스 URL 의 경로 로 만들라고

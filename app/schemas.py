@@ -180,6 +180,14 @@ class TraceSummary(BaseModel):
     rerank_ms: int | None = None
     generate_ms: int | None = None
     total_ms: int | None = None
+    # 실패로 끝난 질의에만 채워진다(NULL = 실패하지 않음). 실패한 질의도
+    # 이제 traces 에 남으므로, 이 둘이 없으면 목록에서 실패한 행이 "답이
+    # 빈 성공"과 구분되지 않는다 — 없느니만 못한 기록이 된다. 소유자에게만
+    # 보이고, 내용도 이미 그 사람이 응답으로 받아 본 detail 이거나 예외
+    # 클래스 이름이다(메시지는 저장하지 않는다). 실패 사유를 주인에게
+    # 그대로 보여주는 것은 documents.error 가 이미 하고 있는 일이다.
+    status_code: int | None = None
+    error: str | None = None
     created_at: datetime | None = None
 
 
@@ -206,12 +214,29 @@ class Percentiles(BaseModel):
 
 
 class QueryStats(BaseModel):
+    """Queries in the window. ``total`` counts every admitted request.
+
+    That includes the ones that ended in an error, and it has to: while only
+    successes were recorded, an embedding outage made this number *fall*, so
+    the hour the operator was paging through looked like a quiet one.
+    ``failed`` is the subset that did not answer — ``total - failed`` is what
+    used to be reported as ``total``.
+    """
+
     total: int
     cached: int
     refused: int
+    failed: int
 
 
 class DocumentStats(BaseModel):
+    """How the corpus stands **right now** — deliberately not windowed.
+
+    This is a gauge, not a count of events: narrowing it to ``window_hours``
+    would answer "documents uploaded in the last hour", so a healthy corpus
+    queried with ``hours=1`` would report ``ready: 0``.
+    """
+
     ready: int = 0
     processing: int = 0
     pending: int = 0
@@ -246,4 +271,13 @@ class AdminStats(BaseModel):
     tokens_in: int
     tokens_out: int
     documents: DocumentStats
+    # Indexing failures, in the window. The name stays as it was — nothing
+    # consumes it but the README — while the query-side list gets a qualified
+    # one, because the unqualified word is the older field's.
     failures: list[FailureReason]
+    # Query failures, grouped as "<status> <reason>". Separate from the list
+    # above rather than merged into it: an indexing failure is a document a
+    # user has to re-upload, a query failure is a request that is already
+    # gone, and an operator reading one number for both cannot tell which of
+    # the two is happening.
+    query_failures: list[FailureReason]

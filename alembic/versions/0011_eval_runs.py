@@ -1,7 +1,7 @@
 """M7 W3: eval_runs 와 eval_results
 
-Revision ID: 0010
-Revises: 0009
+Revision ID: 0011
+Revises: 0010
 Create Date: 2026-09-14
 
 L1 평가 결과를 버전별로 남긴다. 회귀를 자동으로 잡으려면 "지금 점수"가
@@ -29,8 +29,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "0010"
-down_revision: Union[str, None] = "0009"
+revision: str = "0011"
+down_revision: Union[str, None] = "0010"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

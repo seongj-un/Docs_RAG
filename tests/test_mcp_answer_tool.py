@@ -18,7 +18,7 @@ score and watching the refusal guardrail fire without an LLM call.
 
 **It is distinguishable forever.** ``traces.source`` is ``mcp_answer``, which is
 what lets W6's comparison be recomputed from the database after the report is
-gone (migration 0015).
+gone (migration 0014).
 
 The LLM is stubbed. A test that called Gemini would be a test that costs money
 and fails when a free tier runs out, and nothing here is about the model — it is
@@ -146,7 +146,7 @@ def test_the_two_modes_are_the_deployed_surface_and_one_extra_tool():
 def test_the_two_modes_leave_different_trace_sources(stub_models, stub_llm):
     """같은 사용자·같은 질문이 어느 모드였는지 traces 만으로 갈린다.
 
-    이것이 마이그레이션 0015 의 존재 이유 전체다. 두 모드가 같은 source 를
+    이것이 마이그레이션 0014 의 존재 이유 전체다. 두 모드가 같은 source 를
     남기면 오늘의 표를 잃는 순간 그 비교는 영영 복원 불가능해진다.
     """
 
