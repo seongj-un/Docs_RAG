@@ -1,11 +1,18 @@
 """Shared query pipeline.
 
-``POST /query`` (one-shot) and ``POST /conversations/{id}/query`` (streaming,
-persisted) must behave identically on everything that is not presentation:
-rate limits, quota, scope ownership, the semantic cache, retrieval, usage
-accounting and tracing. Keeping that in one place is what stops the two
-endpoints from drifting — a limit enforced on one path but not the other is a
-hole, not a difference.
+``POST /query`` (one-shot), ``POST /conversations/{id}/query`` (streaming,
+persisted) and the MCP ``search_documents`` tool (M7 W2) must behave
+identically on everything that is not presentation: rate limits, quota, scope
+ownership, the semantic cache, retrieval, usage accounting and tracing.
+Keeping that in one place is what stops the callers from drifting — a limit
+enforced on one path but not the other is a hole, not a difference.
+
+The MCP tool is the third consumer and the first one that stops before
+generation: it hands chunks to a calling agent that writes the answer itself.
+That is why ``finalize`` has a generation-less sibling (``finalize_search``)
+rather than the tool closing out its own quota and trace — the part the tool
+skips is generation, not the accounting, and accounting that lives in the
+caller is accounting that drifts.
 
 The runner is a single request's worth of state, so the callers pass the
 question once instead of threading a dozen arguments through every step.
@@ -31,6 +38,7 @@ from app.services.tracing import (
     STAGE_RERANK,
     STAGE_RRF,
     STAGE_SPARSE,
+    TRACE_SOURCES,
     Stopwatch,
     TraceDraft,
 )
@@ -88,7 +96,15 @@ class QueryRunner:
         *,
         document_id: uuid.UUID | None,
         hybrid: bool | None,
+        source: str,
     ) -> None:
+        # ``source`` 에 기본값을 두지 않는다. 네 번째 소비자가 생겼을 때
+        # 빠뜨리면 TypeError 로 즉시 터지고, 무엇을 적을지 결정하려면
+        # tracing.TRACE_SOURCES 를 보게 된다 — 기본값을 주면 그 소비자의
+        # 트레이스가 말없이 /query 것으로 집계된다. 이 컬럼의 존재 이유가
+        # "어느 소비자인가"이므로, 틀린 값보다 컴파일 시점의 실패가 낫다.
+        if source not in TRACE_SOURCES:
+            raise ValueError(f"unknown trace source: {source!r}")
         self.session = session
         self.user = user
         self.question = question
@@ -98,6 +114,7 @@ class QueryRunner:
         self.draft = TraceDraft(
             user_id=user.id,
             question=question,
+            source=source,
             document_id=document_id,
             hybrid=self.use_hybrid,
         )
@@ -216,7 +233,25 @@ class QueryRunner:
         self.draft.stage_chunks = found.stage_chunks
         return found
 
-    async def retrieve(self) -> Retrieval:
+    async def retrieve(self, *, limit: int | None = None) -> Retrieval:
+        """Retrieve the context for this question.
+
+        ``limit`` caps how many chunks come back, defaulting to the configured
+        context size (``RERANK_TOP`` on the hybrid path, ``TOP_K`` on the dense
+        one). Only the MCP tool passes it: an agent asking for more evidence is
+        a legitimate request the HTTP endpoints have no way to express, because
+        their context size is a tuned property of *our* prompt, not a caller's
+        choice. The cap is applied to the returned context only — the per-stage
+        records handed to ``_remember`` keep everything each stage actually
+        saw, so a trace still shows a chunk that retrieval found and the cap
+        cut off, and it shows it even when the request later fails.
+        """
+        # 관측 전용(M7 W7). 이 값이 정해지는 유일한 자리라 여기서 적는다 —
+        # 스팬 속성으로만 나가고 traces 에는 컬럼이 없다(tracing.TraceDraft).
+        self.draft.top_k = limit or (
+            settings.rerank_top if self.use_hybrid else settings.top_k
+        )
+
         if not self.use_hybrid or self.sparse is None:
             async with self.watch.time("retrieve"):
                 hits = await retrieve.search(
@@ -225,7 +260,15 @@ class QueryRunner:
                     user_id=self.user.id,
                     document_id=self.document_id,
                 )
-            return self._remember(Retrieval(hits, {}, {STAGE_DENSE: hits}))
+            # 여기서 자르는 것은 반환 컨텍스트뿐이다. SQL 의 LIMIT 을 대신
+            # 건드리지 않는 이유는 dense 경로의 TOP_K(8)가 이미 작아서 아낄
+            # 것이 없고, retrieve.search() 의 호출 모양을 바꾸면 그 시그니처에
+            # 기대고 있는 기존 테스트들이 깨지기 때문이다. 단계 기록에는 자르기
+            # 전의 hits 를 통째로 넘긴다 — _remember 가 남기려는 것이 "검색이
+            # 무엇을 봤는가"이지 "호출자에게 무엇을 돌려줬는가"가 아니다.
+            return self._remember(
+                Retrieval(hits[:limit] if limit else hits, {}, {STAGE_DENSE: hits})
+            )
 
         async with self.watch.time("retrieve"):
             fused = await retrieve.hybrid_search(
@@ -246,7 +289,7 @@ class QueryRunner:
                     self.question, [c.content for c in fused.candidates]
                 )
         top: list[retrieve.RetrievedChunk] = []
-        for idx, score in ranked[: settings.rerank_top]:
+        for idx, score in ranked[: limit or settings.rerank_top]:
             chunk = fused.candidates[idx]
             chunk.score = score  # replace RRF score with reranker relevance
             top.append(chunk)
@@ -297,6 +340,38 @@ class QueryRunner:
         self.draft.llm_model = settings.llm_model
         self.draft.tokens_in = tokens_in
         self.draft.tokens_out = tokens_out
+        self.draft.chunk_count = len(found.chunks)  # 관측 전용
+        self.draft.stage_ids = found.stage_ids
+        self.draft.stage_chunks = found.stage_chunks
+        await tracing.record(self.session, self.draft, self.watch)
+
+    async def finalize_search(self, *, found: Retrieval) -> None:
+        """Close out a request that stopped at retrieval (the MCP tool).
+
+        Same accounting as ``finalize`` minus the two things that only exist
+        because of generation:
+
+        *Semantic cache.* ``cache.store`` keys an **answer** to a question
+        embedding. There is no answer here — the calling agent writes it — so
+        there is nothing to store, and a probe would be worse than useless: a
+        hit would hand the agent a previous answer's prose when it asked for
+        chunks. The MCP path therefore neither reads nor writes the cache,
+        which is also why this runner never calls ``cached_answer``.
+
+        *Token spend.* ``tokens_in``/``tokens_out`` stay 0 because no model was
+        called. They are a real 0, not a missing measurement.
+
+        The trace is written exactly as the HTTP paths write theirs, because
+        W4/W5 pull the L3 numbers (툴 선택 정확도, 호출 수) out of these rows —
+        not recording here would mean re-instrumenting later against traffic
+        that is already gone. Which consumer wrote a row is ``traces.source``
+        (마이그레이션 0012), set from the ``source`` this runner was built
+        with — so selecting MCP traffic is ``WHERE source = 'mcp_search'``
+        and stays true no matter what a fourth consumer does.
+        """
+        await usage.commit_reservation(self.session, self._reservation_id)
+        self._reservation_id = None
+        self.draft.chunk_count = len(found.chunks)  # 관측 전용
         self.draft.stage_ids = found.stage_ids
         self.draft.stage_chunks = found.stage_chunks
         self._trace_pending = False  # record_cache_hit 와 같은 이유
@@ -344,14 +419,15 @@ class QueryRunner:
         """Undo the quota reservation if the work it stood for never finished.
 
         Callers must reach this from every failure path between
-        ``enforce_limits`` and whichever of ``record_cache_hit``/``finalize``
-        the request was headed for — embedding a 503, retrieval raising,
-        the LLM call failing partway through a stream — or the reservation
-        commits the request never earned. Safe to call unconditionally from
-        an ``except``/``finally``: once ``record_cache_hit`` or ``finalize``
+        ``enforce_limits`` and whichever of ``record_cache_hit``/``finalize``/
+        ``finalize_search`` the request was headed for — embedding a 503,
+        retrieval raising, the LLM call failing partway through a stream — or
+        the reservation commits the request never earned. Safe to call
+        unconditionally from an ``except``/``finally``: once one of those three
         has run, ``_reservation_id`` is already ``None`` and this is a no-op,
-        which is what lets both routers call it blindly on any exception
-        without first working out whether one of those two ran.
+        which is what lets every caller call it blindly on any exception
+        without first working out which of them ran. It is equally a no-op when
+        ``enforce_limits`` itself is what failed, since no reservation stands.
         """
         if self._reservation_id is None:
             return

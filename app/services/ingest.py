@@ -41,11 +41,17 @@ async def index_document(document_id: uuid.UUID, file_path: str) -> None:
                 pages,
                 chunk_size=settings.chunk_size,
                 chunk_overlap=settings.chunk_overlap,
+                strategy=settings.chunk_strategy,
+                heading_prefix=settings.chunk_heading_prefix,
             )
             if not parts:
                 raise ValueError("no extractable text in PDF")
 
-            contents = [p.content for p in parts]
+            # 임베딩 입력과 저장 내용이 갈린다. CHUNK_HEADING_PREFIX 가 켜지면
+            # 임베더는 헤딩 경로가 붙은 텍스트를 보고, 저장되는 content 는
+            # 원문 그대로다 — 인용이 PDF 에 없는 문장을 가리키지 않게 하려면
+            # 이쪽이 원문이어야 한다. 기본값에서는 둘이 같은 문자열이다.
+            contents = [p.embed_text for p in parts]
             # M2: store dense + sparse when hybrid is on so docs are
             # hybrid-ready; fall back to dense-only otherwise.
             if settings.hybrid_enabled:

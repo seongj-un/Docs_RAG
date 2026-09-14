@@ -21,6 +21,7 @@ from app.models import User
 from app.schemas import Citation, QueryRequest, QueryResponse
 from app.services import generate
 from app.services.pipeline import QueryRunner
+from app.services.tracing import SOURCE_QUERY
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,12 @@ async def query(
     session: AsyncSession = Depends(get_session),
 ) -> QueryResponse:
     runner = QueryRunner(
-        session, user, body.question, document_id=body.document_id, hybrid=body.hybrid
+        session,
+        user,
+        body.question,
+        document_id=body.document_id,
+        hybrid=body.hybrid,
+        source=SOURCE_QUERY,
     )
     try:
         await runner.enforce_limits(

@@ -36,7 +36,7 @@ from app.services import auth, tracing
 from app.services.generate import Answer
 from app.services.ratelimit import query_limiter
 from app.services.retrieve import HybridResult, RetrievedChunk
-from app.services.tracing import Stopwatch, TraceDraft
+from app.services.tracing import SOURCE_QUERY, Stopwatch, TraceDraft
 from app.services.upstream import UpstreamUnavailable
 
 EMBED_DIM = settings.embed_dim
@@ -121,7 +121,7 @@ def test_a_rollback_that_throws_does_not_escape_the_recorder():
     """
     session = _BrokenSession(rollback_exc=RuntimeError("connection is gone"))
     result = asyncio.run(
-        tracing.record(session, TraceDraft(user_id=uuid.uuid4(), question="q"), Stopwatch())
+        tracing.record(session, TraceDraft(user_id=uuid.uuid4(), question="q", source=SOURCE_QUERY), Stopwatch())
     )
     assert result is None
     assert session.rolled_back == 1
@@ -139,7 +139,7 @@ def test_cancellation_cleans_the_session_and_still_propagates():
     async def scenario():
         with pytest.raises(asyncio.CancelledError):
             await tracing.record(
-                session, TraceDraft(user_id=uuid.uuid4(), question="q"), Stopwatch()
+                session, TraceDraft(user_id=uuid.uuid4(), question="q", source=SOURCE_QUERY), Stopwatch()
             )
 
     asyncio.run(scenario())

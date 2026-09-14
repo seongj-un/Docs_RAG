@@ -13,62 +13,22 @@ import argparse
 import asyncio
 import uuid
 
-from sqlalchemy import select
-
-from eval import metrics, pdf
+from eval import indexing, metrics
 from eval.corpora import load
 
 from app.constants import SEED_USER_ID
 from app.db import SessionLocal, engine
-from app.models import Chunk, Document
-from app.services import embeddings, ingest, rerank, retrieve
+from app.services import embeddings, rerank, retrieve
 
 CONFIGS = ("dense", "hybrid", "hybrid+rerank")
 
 
 async def index_corpus(corpus, path: str, doc_name: str) -> uuid.UUID:
     """Build the fixture PDF and index it, replacing any prior run's copy."""
-    pdf.build_pdf(path, corpus.CLAUSES)
-    pdf.verify_pdf(path, corpus.CLAUSES)
-
-    async with SessionLocal() as session:
-        stale = (
-            (await session.execute(select(Document).where(Document.filename == doc_name)))
-            .scalars()
-            .all()
-        )
-        for doc in stale:
-            await session.delete(doc)
-        await session.commit()
-
-        # Eval fixtures belong to the seed account (the same owner migration
-        # 0003 assigned pre-M3 documents to), so runs stay isolated from real users.
-        doc = Document(
-            user_id=SEED_USER_ID,
-            filename=doc_name,
-            mime_type="application/pdf",
-            status="pending",
-        )
-        session.add(doc)
-        await session.commit()
-        await session.refresh(doc)
-        doc_id = doc.id
-
-    await ingest.index_document(doc_id, path)
-
-    async with SessionLocal() as session:
-        doc = await session.get(Document, doc_id)
-        chunks = (
-            (await session.execute(select(Chunk).where(Chunk.document_id == doc_id)))
-            .scalars()
-            .all()
-        )
-        with_sparse = sum(1 for c in chunks if c.sparse_embedding is not None)
-        print(f"[index] status={doc.status} pages={doc.num_pages} "
-              f"chunks={len(chunks)} with_sparse={with_sparse}")
-        if doc.status != "ready":
-            raise RuntimeError(f"indexing failed: {doc.error}")
-    return doc_id
+    # 본체는 eval/indexing.py 로 옮겼다 — M7 하네스가 코퍼스 모듈이 아니라
+    # 쪽 텍스트에서 출발하기 때문이다. 이름과 시그니처는 그대로 둔다:
+    # candk_sweep 이 이 함수를 부른다.
+    return await indexing.index_pages(corpus.CLAUSES, path, doc_name)
 
 
 async def dense_pages(session, question: str, doc_id: uuid.UUID, k: int) -> list[int]:
@@ -124,7 +84,10 @@ def print_disagreements(rows: list[dict]) -> None:
 
 async def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--corpus", default="hard", choices=("simple", "hard", "longchunk", "wide"))
+    parser.add_argument(
+        "--corpus", default="hard",
+        choices=("simple", "hard", "longchunk", "wide", "deep", "spec"),
+    )
     parser.add_argument("--k", type=int, default=5, help="cutoff for R@k / nDCG@k")
     args = parser.parse_args()
 

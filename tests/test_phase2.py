@@ -18,6 +18,7 @@ from app.main import app
 from app.models import QueryCache, User
 from app.services import auth, cache, llm
 from app.services.ratelimit import query_limiter
+from app.services.tracing import SOURCE_QUERY
 
 EMBED_DIM = settings.embed_dim
 
@@ -172,8 +173,14 @@ def test_concurrent_queries_from_a_verified_account_accept_only_one_over_quota(
             user_b = UserModel(
                 id=user_id, email="b", password_hash="x", email_verified_at=verified_now
             )
-            runner_a = QueryRunner(session_a, user_a, "q", document_id=None, hybrid=False)
-            runner_b = QueryRunner(session_b, user_b, "q", document_id=None, hybrid=False)
+            runner_a = QueryRunner(
+                session_a, user_a, "q", document_id=None, hybrid=False,
+                source=SOURCE_QUERY,
+            )
+            runner_b = QueryRunner(
+                session_b, user_b, "q", document_id=None, hybrid=False,
+                source=SOURCE_QUERY,
+            )
 
             task_a = asyncio.create_task(runner_a.enforce_limits("10.0.0.1"))
             task_b = asyncio.create_task(runner_b.enforce_limits("10.0.0.2"))

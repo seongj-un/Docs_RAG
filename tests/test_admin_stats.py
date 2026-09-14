@@ -18,6 +18,11 @@ from app.db import SessionLocal, engine
 from app.main import app
 from app.models import Document, Trace, User
 from app.services import auth
+from app.services.tracing import (
+    SOURCE_CONVERSATION,
+    SOURCE_MCP_SEARCH,
+    SOURCE_QUERY,
+)
 
 TOKEN = "test-admin-token"
 
@@ -111,12 +116,17 @@ def test_counts_and_stage_percentiles():
                 await session.refresh(user)
 
                 now = datetime.now(timezone.utc)
+                # source 는 소비자별 호출 수(by_source)를 위해 일부러 섞었다 —
+                # 에이전트 트래픽과 사람 트래픽이 한 숫자로 합쳐지면 어느 쪽이
+                # 늘었는지 알 수 없다는 것이 그 필드의 존재 이유다.
                 session.add_all([
                     Trace(user_id=user.id, question="q1", cached=False, refused=False,
+                          source=SOURCE_QUERY,
                           tokens_in=10, tokens_out=5, embed_ms=100, retrieve_ms=50,
                           rerank_ms=1000, generate_ms=2000, total_ms=3150,
                           created_at=now),
                     Trace(user_id=user.id, question="q2", cached=False, refused=True,
+                          source=SOURCE_CONVERSATION,
                           tokens_in=8, tokens_out=2, embed_ms=200, retrieve_ms=60,
                           rerank_ms=1200, generate_ms=2400, total_ms=3860,
                           created_at=now),
@@ -124,10 +134,12 @@ def test_counts_and_stage_percentiles():
                     # question has to become a vector before it can be looked
                     # up. Only the three later timers stay NULL.
                     Trace(user_id=user.id, question="q3", cached=True, refused=False,
+                          source=SOURCE_MCP_SEARCH,
                           tokens_in=0, tokens_out=0, embed_ms=90, total_ms=770,
                           created_at=now),
                     # Outside the window; must not be counted.
                     Trace(user_id=user.id, question="old", cached=False,
+                          source=SOURCE_QUERY,
                           tokens_in=999, tokens_out=999, total_ms=99999,
                           created_at=now - timedelta(days=3)),
                 ])
@@ -187,6 +199,16 @@ def test_counts_and_stage_percentiles():
     assert body["stages"]["generate"]["p50"] == 2200  # 2000·2400 둘뿐, 히트는 NULL
     assert set(body["stages"]) == {"embed", "retrieve", "rerank", "generate"}
 
+    # 소비자별 호출 수. 창 밖의 행과 마찬가지로 다른 실행이 남긴 행이 섞일 수
+    # 있으므로, 이 테스트가 심은 세 소스가 **모두 보이는지**만 본다 — W4 가
+    # 에이전트 트래픽(mcp_search)을 사람 트래픽에서 갈라낼 수 있다는 것이
+    # 이 필드의 요점이다.
+    assert body["by_source"][SOURCE_QUERY] >= 1
+    assert body["by_source"][SOURCE_CONVERSATION] >= 1
+    assert body["by_source"][SOURCE_MCP_SEARCH] >= 1
+    # 합계와 어긋나면 안 된다.
+    assert sum(body["by_source"].values()) == body["queries"]["total"]
+
 
 @needs_db
 def test_window_is_honoured():
@@ -226,19 +248,24 @@ def test_query_failures_are_counted_and_named():
                 now = datetime.now(timezone.utc)
                 session.add_all([
                     Trace(user_id=user.id, question="ok", cached=False,
+                          source=SOURCE_QUERY,
                           total_ms=3000, embed_ms=300, created_at=now),
                     # 죽은 임베더: 빨리 실패한다.
                     Trace(user_id=user.id, question="f1", cached=False,
+                          source=SOURCE_QUERY,
                           status_code=503, error="search unavailable",
                           total_ms=2, embed_ms=2, created_at=now),
                     Trace(user_id=user.id, question="f2", cached=False,
+                          source=SOURCE_QUERY,
                           status_code=503, error="search unavailable",
                           total_ms=2, embed_ms=2, created_at=now),
                     Trace(user_id=user.id, question="f3", cached=False,
+                          source=SOURCE_QUERY,
                           status_code=500, error="RuntimeError",
                           total_ms=5, created_at=now),
                     # 창 밖의 실패는 이번 창에 세어지면 안 된다.
                     Trace(user_id=user.id, question="old", cached=False,
+                          source=SOURCE_QUERY,
                           status_code=503, error="search unavailable",
                           total_ms=3, created_at=now - timedelta(days=3)),
                 ])

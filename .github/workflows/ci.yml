@@ -51,6 +51,22 @@ jobs:
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/docs_rag
 
+      - name: 평가 데이터셋 검증
+        # 골든셋의 정답은 청크 ID가 아니라 원문 스니펫이고, 러너가 실행
+        # 시점에 역매칭한다(eval/datasets/FORMAT.md). 그래서 문서가 바뀌면
+        # 스니펫이 문서에서 사라지거나 여러 곳에 걸릴 수 있는데, 그 사실은
+        # 다음 평가 실행 때까지 아무 데서도 드러나지 않는다 — 그때 나오는
+        # 것은 "라벨이 낡았다"가 아니라 그냥 낮아진 지표다.
+        #
+        # 이 검사는 DB도 모델 서버도 필요 없어서 매 커밋 돌 수 있다. W1이
+        # "문서 수정으로 스니펫 매칭이 깨지면 고치지 말고 CI에서 깨지게 두라"
+        # 고 적은 함정이 바로 여기서 걸린다.
+        run: |
+          set -o pipefail
+          for dataset in eval/datasets/*.jsonl; do
+            python -m eval.harness validate --dataset "$dataset"
+          done
+
       - name: 테스트
         # 통합 테스트는 Postgres가 없으면 스스로 스킵한다. 그대로 두면 DB가
         # 빠졌을 때 CI가 초록으로 보이면서 격리·대화·SSE를 아무것도 검증하지
@@ -68,6 +84,74 @@ jobs:
           # 외부 모델 서버는 CI에 없다. 테스트가 전부 스텁으로 갈음하지만,
           # 실수로 진짜 호출이 생기면 빈 키로 즉시 터지게 둔다.
           GEMINI_API_KEY: ""
+
+  # L1 지표의 **실제 수치**는 임베딩·리랭크 서버가 있어야 나온다. GitHub
+  # 호스티드 러너에는 없다 — BGE-M3와 리랭커를 매 커밋 내려받아 띄우는 것은
+  # 분 단위 비용이고, 그렇게 재도 CPU 러너의 수치는 우리가 튜닝한 환경의
+  # 수치와 비교할 수 없다. 비교 불가능한 숫자로 회귀를 판정하면 경보가
+  # 울리든 말든 의미가 없다.
+  #
+  # 그래서 검증을 둘로 나눴다:
+  #   backend 잡  하네스 **자체**를 검증한다 — 데이터셋 포맷, gold 스니펫
+  #               고유성, 지표 계산, 회귀 판정, Postgres 저장·조회. 전부
+  #               모델 없이 돌고, 전부 매 커밋 돈다. 스텁 임베딩으로 진짜
+  #               청킹·진짜 pgvector 조회까지 지나간다
+  #               (tests/test_eval_harness_run.py).
+  #   eval 잡     실제 수치를 내고 직전 실행과 diff한다. 모델 서버가 붙은
+  #               러너에서만 돈다.
+  #
+  # eval 잡이 꺼져 있어도 CI가 "조용히 통과"하지는 않는다 — 하네스가 깨지면
+  # backend 잡이 빨개진다. 꺼져 있을 때 못 잡는 것은 "코드는 멀쩡한데 검색
+  # 품질이 떨어진 커밋" 하나뿐이고, 그건 모델 서버 없이는 살 수 없는 보증이다.
+  # 살 수 있는 척하느니 어디까지 보증되는지를 적어두는 쪽을 택했다.
+  #
+  # 켜려면 저장소 변수에 EVAL_ENABLED=true, EVAL_RUNNER=<러너 라벨>,
+  # EVAL_TEI_URL / EVAL_RERANK_URL 을 넣는다.
+  eval:
+    if: vars.EVAL_ENABLED == 'true'
+    runs-on: ${{ vars.EVAL_RUNNER || 'ubuntu-latest' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 스키마 적용
+        run: alembic upgrade head
+        env:
+          DATABASE_URL: ${{ secrets.EVAL_DATABASE_URL }}
+
+      - name: L1 실행
+        # tune split만 돈다. holdout 30%는 W8 최종 측정에서만 연다 —
+        # 매 커밋 들여다보면 그 순간 홀드아웃이 아니게 된다.
+        run: |
+          python -m eval.harness run \
+            --dataset eval/datasets/synthetic_golden.jsonl \
+            --config hybrid+rerank \
+            --label "ci ${{ github.sha }}"
+        env:
+          DATABASE_URL: ${{ secrets.EVAL_DATABASE_URL }}
+          TEI_URL: ${{ vars.EVAL_TEI_URL }}
+          RERANK_URL: ${{ vars.EVAL_RERANK_URL }}
+
+      - name: 직전 실행과 비교
+        # 회귀가 있으면 non-zero로 끝나고 이 잡이 빨개진다. 완료 기준
+        # ("커밋 하나로 지표 변화가 자동 출력된다")이 성립하는 지점이다.
+        run: |
+          python -m eval.harness diff \
+            --dataset eval/datasets/synthetic_golden.jsonl \
+            --config hybrid+rerank \
+            --base latest~1 --head latest
+        env:
+          DATABASE_URL: ${{ secrets.EVAL_DATABASE_URL }}
 
   frontend:
     runs-on: ubuntu-latest

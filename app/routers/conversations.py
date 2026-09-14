@@ -44,6 +44,7 @@ from app.schemas import (
 )
 from app.services import generate, llm
 from app.services.pipeline import NOT_FOUND, QueryRunner
+from app.services.tracing import SOURCE_CONVERSATION
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +178,12 @@ async def _stream_turn(
             )
 
             runner = QueryRunner(
-                session, user, body.question, document_id=scope, hybrid=body.hybrid
+                session,
+                user,
+                body.question,
+                document_id=scope,
+                hybrid=body.hybrid,
+                source=SOURCE_CONVERSATION,
             )
             await runner.enforce_limits(client_ip)
             await runner.resolve_scope()

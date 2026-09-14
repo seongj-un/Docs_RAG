@@ -12,3 +12,13 @@ SEED_USER_EMAIL = "seed@local.invalid"
 
 # Not a valid argon2 encoded hash, so verification always fails.
 UNUSABLE_PASSWORD_HASH = "!unusable"
+
+# Owner of the M7 evaluation harness's fixtures. Separate from SEED_USER_ID on
+# purpose: the harness searches corpus-wide (a question must find the right
+# document, not just the right page inside a given one), so whatever this
+# account owns *is* the corpus. The seed account accumulates leftovers from
+# every other eval runner — eval_corpus_hard.pdf, golden_*.pdf, real uploads
+# — and sharing it would make the numbers depend on what someone happened to
+# index last week. Like the seed account, it can never be logged into.
+EVAL_USER_ID = uuid.UUID("00000000-0000-0000-0000-0000000e7a10")
+EVAL_USER_EMAIL = "m7-eval@local.invalid"

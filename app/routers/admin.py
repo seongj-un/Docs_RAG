@@ -120,6 +120,21 @@ async def stats(
         await session.execute(select(*_percentiles(Trace.total_ms)).where(answered))
     ).one()
 
+    # 소비자별 호출 수. MCP 에이전트는 사람보다 훨씬 자주 부르므로, 합계만
+    # 보면 질의가 늘어난 것인지 에이전트 하나가 루프를 돈 것인지 구별되지
+    # 않는다 — W4 의 L3 "호출 수"가 이 숫자다. 실패한 질의도 센다: 어느
+    # 소비자가 장애를 맞고 있는지가 곧 이 숫자가 답해야 하는 질문이다.
+    by_source = dict(
+        (
+            await session.execute(
+                select(Trace.source, func.count())
+                .where(recent)
+                .group_by(Trace.source)
+                .order_by(func.count().desc())
+            )
+        ).all()
+    )
+
     # Cache hits used to be excluded here, on the premise that they skip every
     # stage. They do not: the cache is *semantic*, so the question has to be
     # embedded before it can be looked up (``pipeline.embed`` runs, then
@@ -194,6 +209,7 @@ async def stats(
         queries=QueryStats(
             total=total, cached=cached, refused=refused, failed=failed
         ),
+        by_source=by_source,
         total_ms=_pair(*overall),
         stages=stages,
         tokens_in=tokens_in,
