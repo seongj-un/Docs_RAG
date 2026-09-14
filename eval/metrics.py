@@ -124,6 +124,28 @@ def chunk_ndcg_at_k(ranked_ids: list[uuid.UUID], gold: GoldSets, k: int) -> floa
     return dcg / ideal if ideal else 0.0
 
 
+def chunk_precision_at_k(ranked_ids: list[uuid.UUID], gold: GoldSets, k: int) -> float:
+    """Fraction of the top-k retrieved chunks that cover some gold span.
+
+    W5 없이는 이 지표가 없어도 됐다. W5 에는 필요하다 — Notion 이 적은 함정
+    1번이 "recall 만 올리고 precision 을 버리면 컨텍스트가 늘어 비용·지연이
+    나빠진다"이고, precision 을 내지 않으면 그 함정에 빠졌는지를 **확인할 방법
+    자체가 없다**. recall 만 보면 후보를 넓히는 모든 변경이 무조건 좋아 보인다.
+
+    분모는 ``k`` 가 아니라 실제로 돌려준 개수다. 코퍼스가 작아 k개를 못 채운
+    실행을 "정밀도가 낮다"고 벌주면, 지표가 검색이 아니라 코퍼스 크기를 잰다.
+
+    천장이 1.0 이 아닌 것은 정상이다. 정답 스팬이 하나뿐인 질문의 P@10 은
+    아무리 잘해도 0.1~0.2 다. 절대값이 아니라 **같은 k 에서의 구성 간 비교**로
+    읽을 것.
+    """
+    if not gold or not ranked_ids:
+        return 0.0
+    top = ranked_ids[:k]
+    wanted: set[uuid.UUID] = set().union(*gold)
+    return sum(1 for chunk_id in top if chunk_id in wanted) / len(top)
+
+
 def page_recall_at_k(ranked_pages: list, gold_pages: list, k: int) -> float:
     """Fraction of gold pages present in the top-k retrieved pages.
 
@@ -154,6 +176,7 @@ def score_chunks(
 ) -> dict[str, float]:
     """All chunk-level L1 metrics for one question, keyed for aggregation."""
     scored = {f"R@{k}": span_recall_at_k(ranked_ids, gold, k) for k in ks}
+    scored.update({f"P@{k}": chunk_precision_at_k(ranked_ids, gold, k) for k in ks})
     scored["MRR"] = chunk_reciprocal_rank(ranked_ids, gold)
     scored[f"nDCG@{ndcg_k}"] = chunk_ndcg_at_k(ranked_ids, gold, ndcg_k)
     if ranked_pages is not None and gold_pages is not None:
@@ -163,5 +186,15 @@ def score_chunks(
 
 
 def metric_keys(ks: tuple[int, ...] = DEFAULT_KS, ndcg_k: int = NDCG_K) -> list[str]:
-    """The key order reports and diffs print in."""
-    return [f"R@{k}" for k in ks] + ["MRR", f"nDCG@{ndcg_k}"]
+    """The key order reports and diffs print in.
+
+    recall 옆에 precision 을 **나란히** 둔다. 떨어져 있으면 눈이 recall 만
+    쫓고, 그러면 Notion 함정 1번("recall 만 올리고 precision 을 버린다")이
+    리포트를 통과한다. 회귀 판정(``eval/report.py``)도 이 목록을 쓰므로,
+    precision 이 떨어지는 변경은 여기 들어온 순간부터 CI 가 잡는다.
+    """
+    return (
+        [f"R@{k}" for k in ks]
+        + [f"P@{k}" for k in ks]
+        + ["MRR", f"nDCG@{ndcg_k}"]
+    )

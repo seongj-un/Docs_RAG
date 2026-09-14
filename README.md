@@ -109,6 +109,14 @@ app/
 ├── models.py         # Document, Chunk, User, Session, Trace, Conversation ...
 ├── deps.py           # 인증 의존성
 ├── routers/          # admin auth chunks conversations documents query traces usage
+├── mcp/              # MCP 서버 — 같은 앱에 마운트된다
+│   ├── server.py     # 서버·ASGI 앱 조립 · 인증 모드 · 캐시 힌트
+│   ├── tools.py      # search_documents (QueryRunner 를 그대로 탄다)
+│   ├── auth.py       # 세션 행 베어러 검증기
+│   ├── oauth.py      # OAuth 리소스 서버 — JWT/JWKS 검증. 발급은 하지 않는다
+│   ├── scopes.py     # 스코프 선언·강제 + tools/list 필터
+│   ├── schemas.py    # 툴 입출력 (모델이 읽는다)
+│   └── descriptions.py # 툴 설명 = 프롬프트. W4 가 A/B 한다
 └── services/
     ├── pipeline.py   # 질의 1건의 전 과정 — /query 와 SSE 가 공유
     ├── ingest.py     # 파싱 → 청킹 → 임베딩 → 저장
@@ -123,7 +131,8 @@ app/
     ├── cache.py      # 시맨틱 캐시
     ├── ratelimit.py  # 인메모리 토큰버킷
     ├── usage.py      # DB 집계 쿼터
-    └── tracing.py    # 단계별 지연 기록
+    ├── tracing.py    # 단계별 지연 기록 (제품의 기록: traces 테이블)
+    └── otel.py       # OpenTelemetry 스팬 (운영자의 기록). 기본 no-op
 alembic/versions/     # 마이그레이션 7개
 web/                  # Next.js 16 App Router · TypeScript · Tailwind v4 (+ Dockerfile)
 eval/                 # 검색 품질 평가 하네스 + 라벨링 코퍼스
@@ -154,7 +163,7 @@ tests/                # pytest (Postgres 없으면 통합 테스트는 스킵)
 
 컨테이너 스택에서는 전부 `/api` 아래에 붙는다 — `/api/health`, `/api/query` …
 
-## MCP 서버 — 에이전트로 붙이기 (M7 W2)
+## MCP 서버 — 에이전트로 붙이기 (M7 W2·W7)
 
 Claude·Cursor 같은 에이전트가 **우리 검색을 직접 쓰게** 하는 엔드포인트다.
 별도 프로세스가 아니라 같은 FastAPI 앱에 마운트돼 있으므로, 앱이 떠 있으면
@@ -240,6 +249,134 @@ Cursor (`~/.cursor/mcp.json`) 및 `.mcp.json` 형식의 클라이언트 일반:
 에이전트는 사람보다 훨씬 자주 부른다. 한 질문이 검색 다섯 번이 되는 것이
 정상이므로, 하루 실사용에서 200이 모자라다고 느껴질 수 있다 — 그 관찰 자체가
 W2 의 완료 기준("불편한 지점 3개 이상 기록")에 해당한다.
+
+### 5. OAuth 로 바꿔 달기 (M7 W7)
+
+**이 서버는 토큰을 발급하지 않는다.** 리소스 서버다 — 로그인·동의·발급은 기존
+IdP 의 일이고, 인가 서버를 직접 만드는 것은 범위 밖이다. 여기 있는 것은
+"남이 발급한 토큰을 어떻게 검증할 것인가"뿐이다.
+
+`MCP_AUTH_MODE` 가 어느 자격증명을 받을지 정한다:
+
+| 값 | 받는 것 | 쓰는 때 |
+| --- | --- | --- |
+| `session` (기본) | 세션 행 베어러 (위 1~4절) | 지금. 실제로 동작하는 유일한 경로다 |
+| `oauth` | IdP 가 발급한 JWT 만 | IdP 를 붙인 뒤 |
+| `both` | JWT 를 먼저, 아니면 세션 | 이행 구간 |
+
+기본이 `session` 인 이유는 두 가지다. 하나는 오늘 붙어 있는 클라이언트를 끊지
+않는 것이고, 다른 하나는 **위험한 방향이 막혀 있기 때문**이다 — "IdP 토큰을
+검증한다고 믿는데 사실 아무거나 받는" 상태는 `oauth`/`both` 에서 설정이 하나라도
+비면 **앱이 기동하지 않으므로** 만들어지지 않는다. 조용히 약해지는 경로가 없다.
+
+```bash
+MCP_AUTH_MODE=oauth
+MCP_OAUTH_ISSUER=https://idp.example.com/            # iss 와 정확히 같은 문자열
+MCP_OAUTH_JWKS_URL=https://idp.example.com/.well-known/jwks.json
+MCP_RESOURCE_SERVER_URL=https://docs.example.com/api/mcp   # = aud
+MCP_OAUTH_ALGORITHMS=["RS256"]
+```
+
+검사하는 것: 서명(JWKS 로 로컬 검증, 요청마다 IdP 를 때리지 않는다) · `iss` ·
+**`aud`**(= 우리 서버용으로 발급된 토큰인가) · `exp` · 허용 알고리즘 목록.
+거절 사유는 전부 같은 401 이다.
+
+**주체는 검증된 `email` 클레임으로 로컬 계정에 붙는다.** 계정을 만들지는
+않는다 — 없으면 401 이다. `email_verified` 가 참이 아닌 토큰도 거절한다(아니면
+IdP 에 남의 주소를 적는 것만으로 그 사람의 테넌트를 지목할 수 있다). 제대로 된
+계정 연결은 별도의 식별 테이블과 사용자 동의 흐름을 요구하는 별개의 작업이고,
+지금은 하지 않았다.
+
+`oauth`/`both` 에서 RFC 9728 문서가 켜진다:
+
+```
+GET /.well-known/oauth-protected-resource/mcp
+→ {"resource": "...", "authorization_servers": ["https://idp.example.com/"], ...}
+```
+
+그리고 401 의 `WWW-Authenticate` 가 그 위치를 안내한다
+(`resource_metadata="https://…/.well-known/oauth-protected-resource/mcp"`).
+`session` 모드에서는 둘 다 켜지 않는다 — 가리킬 인가 서버가 없는데 광고하면
+클라이언트는 쓸 수 있는 베어러 대신 실패할 디스커버리로 끌려간다.
+
+⚠️ **Caddy 뒤에서는 `/.well-known/...` 이 `/api/*` 규칙에 걸리지 않는다.**
+RFC 9728 은 이 문서를 호스트 루트에 두라고 하므로 접두사가 붙지 않는다. 공개
+배포에서는 Caddyfile 에 이 경로를 백엔드로 보내는 규칙을 따로 넣어야 한다.
+
+⚠️ **알려진 한계:** 진짜 IdP 와 맞춰 본 적이 없다. 테스트는 자체 서명 토큰으로
+검증 로직만 돌린다(`tests/test_mcp_oauth.py` — 그 픽스처는 IdP 대체물이
+아니다). JWKS 회전이나 ID 토큰/액세스 토큰 구분 같은 것은 붙이는 날 처음 겪는다.
+
+### 6. 스코프
+
+`docs:search`(읽기) · `docs:write`(쓰기)가 있다. **`tools/list` 는 호출자가 든
+스코프에 따라 다르게 나온다** — 읽기만 있으면 쓰기 툴은 목록에 없다. 직접
+이름을 불러도 거절되고, 그 거절은 어느 스코프가 필요한지 말해 준다(모르면
+에이전트가 같은 호출을 영원히 재시도한다).
+
+오늘 쓰기 툴은 **없다.** 툴이 `search_documents` 하나뿐이고 전부 읽기다. 없는
+쓰기 툴을 증명용으로 만들지 않았고, 대신 게이팅 메커니즘을 만든 뒤 테스트에서
+가짜 쓰기 툴로 증명한다(`tests/test_mcp_scopes.py`).
+
+세션 토큰은 **모든 스코프**를 받는다. 스코프는 *클라이언트*가 사용자보다 적게
+가질 수 있게 하는 장치인데, 세션 id 는 사용자 본인의 자격증명이고 그 사람은 웹
+UI 에서 이미 전부 할 수 있기 때문이다. 좁은 스코프를 가진 클라이언트는 OAuth 가
+만든다.
+
+툴에 스코프를 선언하는 것과 강제하는 것은 **한 줄**이다(`app/mcp/scopes.py` 의
+`scoped_tool`). 선언을 잊은 툴은 아무에게도 보이지 않는다 — 조용히 모두에게
+노출되는 것보다 첫 실행에서 사라지는 편이 낫다.
+
+### 7. 트레이스 (OpenTelemetry)
+
+기본은 **꺼져 있고, 꺼짐은 no-op 이다.** `TracerProvider` 를 아예 설치하지
+않으므로 스팬이 만들어지지 않는다 — 수집기 없이 clone 해도 앱은 그대로 돈다.
+
+```bash
+OTEL_ENABLED=true
+OTEL_EXPORTER=console        # 또는 otlp
+OTEL_SERVICE_NAME=docs-rag
+```
+
+`otlp` 는 `opentelemetry-exporter-otlp-proto-http` 를 따로 설치해야 한다
+(`requirements.txt` 에 없는 이유는 protobuf/requests 를 끌고 오는데 계측을
+켜는 배포에서만 필요해서다). 없으면 기동 시 에러 로그를 남기고 계측 없이 계속
+간다 — 관측이 관측 대상을 내리지는 않는다.
+
+스팬 구조는 **툴 호출 → 검색 → (생성)** 이다. 생성이 괄호인 것은 MCP 경로에는
+없기 때문이다. 툴 호출 스팬과 `_meta` 의 `traceparent` 전파는 **MCP SDK 가 이미
+한다**(`mcp/server/_otel.py`) — 우리는 그것을 다시 하지 않고(중복 계측은 스팬을
+두 번 만든다), 단계 스팬(`docs_rag.embed`/`retrieve`/`rerank`/`generate`)과
+도메인 속성만 더한다:
+
+```
+tools/call search_documents        gen_ai.tool.name, mcp.method.name      ← SDK
+  ├─ docs_rag.embed                                                       ← 우리
+  └─ docs_rag.retrieve                                                    ← 우리
+     docs_rag.{source,tenant,top_k,chunks,tokens_in,tokens_out,total_ms}  ← 우리
+```
+
+`traceparent` 는 **클라이언트가 주는 입력이다.** 부모 스팬을 정하는 데만 쓰고,
+신원이나 테넌트 판단에는 절대 쓰지 않는다. 테넌트는 오직 검증된 토큰에서 온다.
+
+`docs_rag.tenant` 는 **해시**다(blake2s, `person="docs-rag"`, 8바이트). 원문
+`users.id` 는 스팬에 남지 않는다 — 트레이스는 보통 외부 백엔드로 나가고, 거기에
+우리 기본키의 사본을 두지 않으려는 것이다. 키 없는 해시라 사용자 id 목록을 이미
+가진 사람은 추측을 확인할 수 있다. 목적은 비밀 유지가 아니라 비식별화다.
+
+이 스팬들은 `traces` 테이블을 **대체하지 않는다.** 저쪽은 제품의 기록(소유자
+범위, `/traces`·`/admin/stats` 로 조회, W4 의 L3 지표 원천)이고 이쪽은 운영자의
+기록(실시간, 분산, 원문 id 없음)이다. 단계 지연만 공유한다 — 두 번 재면 두
+값이 어긋날 수 있어서다.
+
+### 8. confused deputy 는 만들지 않는다
+
+클라이언트에게 받은 토큰이 업스트림(TEI·리랭커·Gemini)으로 흘러가는 경로는
+**없다.** 그 경로가 생기면 모델 서버를 운영하는 쪽이 우리 사용자의 자격증명을
+쥐게 된다. 업스트림 호출은 `app/services/{embeddings,rerank,llm}.py` 가 하고,
+어느 것도 요청에서 자격증명을 받지 않는다.
+`tests/test_mcp_observability.py` 가 툴 호출 중 나가는 HTTP 요청을 전부 기록해
+토큰이 헤더에도 본문에도 없음을 고정한다.
 
 ## 알아둘 동작
 
@@ -334,6 +471,9 @@ per-IP rate limit이 `request.client.host`를 쓴다. 프록시를 붙이면 그
 | `MCP_ALLOWED_ORIGINS` | 비움 = 로컬호스트만 | 허용 Origin. Claude·Cursor 는 Origin 을 안 보내므로 보통 비워 둔다 |
 | `MCP_TOOLS_CACHE_TTL_MS` | 60000 | `tools/list` 응답의 `ttlMs`. `cacheScope` 는 `private` 고정 |
 | `MCP_RESOURCE_SERVER_URL` | 비움 = 끔 | RFC 9728 메타데이터 라우트. W7 에서 켠다 |
+| `JUDGE_PROVIDER` · `JUDGE_BASE_URL` | `ollama` · `127.0.0.1:11434` | L2 judge 서버. **평가 전용** — 앱 경로는 안 읽는다 |
+| `JUDGE_MODEL` | `qwen3:4b` | L2 judge 모델. Gemini 와 다른 계열이어야 한다(W6) |
+| `JUDGE_NUM_CTX` · `JUDGE_KEEP_ALIVE` | 8192 · `5m` | 루브릭 전문 + 컨텍스트가 들어간다. 넘치면 잘려 나가는 것이 루브릭이다 |
 
 > `MIN_SCORE`(코사인)를 리랭커 시그모이드에 재사용했다가 답변 가능한 질문의
 > 21%를 LLM 호출도 없이 거부한 적이 있다. 두 점수는 같은 양이 아니다.
@@ -443,8 +583,12 @@ exact는 반대로 sparse가 30까지 1.000을 지킨다 — 두 유형이 서�
 ```bash
 python -m eval.sparse_channels   # lexical 채널 비교 (fts / trgm / bge)
 python -m eval.golden_run        # 골든셋 3문서·36문항 → 기록 덤프
-python -m eval.judge_run         # 위 기록으로 4개 품질 지표 산출
+python -m eval.judge_run         # 위 기록으로 M4 의 RAGAS 4지표 산출 (Gemini judge)
 ```
+
+`eval.judge_run` 은 **M4 때 만든 judge** 다 — Gemini 로 faithfulness ·
+answer_relevancy · context_precision · context_recall 을 낸다. M7 의 L2 judge는
+차원도 모델도 다른 별개의 물건이고, 아래 절에 있다. 두 수치를 섞어 쓰지 말 것.
 
 ## L1 평가 하네스 (M7 W3)
 
@@ -480,6 +624,208 @@ CI에서는 backend 잡이 데이터셋 검증과 하네스 전체(포맷·스�
 판정·Postgres 저장)를 매 커밋 돌리고, 실제 수치와 diff는 모델 서버가 붙은
 러너에서만 도는 `eval` 잡이 맡는다(저장소 변수 `EVAL_ENABLED=true`).
 이유는 `.github/workflows/ci.yml` 주석 참조.
+
+## 검색 파이프라인 A/B (M7 W5)
+
+하네스 위에서 **무엇이 얼마나 기여했는지 분리해서** 말하려는 것이다. 네 손잡이
+(청킹 단위 · 헤딩 경로 접두사 · 하이브리드 · 리랭커)를 한꺼번에 켜고 "좋아졌다"
+고 쓰면 기여도를 못 말하므로, 누적 사다리로 **한 칸에 하나씩만** 켠다.
+
+```bash
+python -m eval.harness ab --dataset eval/datasets/spec_golden.jsonl --k 10
+python -m eval.harness ab --dataset <path> --only A1-section   # 한 칸만 다시
+```
+
+2026-09-14 실측 (`eval/corpora/spec.py` 30쪽 3문서, 44문항 중 채점 27):
+
+| 칸 | 청킹 | R@1 | R@5 | R@10 | P@10 | MRR | 재색인s | 지연ms |
+|---|---|---|---|---|---|---|---|---|
+| A0-baseline | fixed | 0.444 | 0.722 | 0.759 | 0.093 | 0.629 | 16.9 | 54 |
+| A1-section | section | 0.481 | 0.759 | 0.796 | 0.093 | 0.663 | 13.6 | 52 |
+| A2-heading-prefix | section+prefix | 0.500 | 0.796 | 0.796 | 0.093 | 0.690 | 13.7 | 53 |
+| A3-hybrid | section+prefix | 0.537 | **0.778** | 0.870 | 0.104 | 0.751 | (재사용) | 70 |
+| A4-rerank | section+prefix | 0.704 | 1.000 | 1.000 | 0.126 | 0.901 | (재사용) | 9457 |
+
+베이스라인 대비: **R@5 0.722 → 1.000 (+0.278)**, R@1 0.444 → 0.704 (+0.259).
+
+**사다리는 단조가 아니다 — 하이브리드 칸이 R@5를 떨어뜨린다**(0.796 → 0.778).
+같은 칸에서 R@10은 +0.074, R@1은 +0.037, MRR은 +0.061로 전부 오른다. 즉
+하이브리드는 정답을 더 깊이 끌어오면서 4~5위 대역을 흐트러뜨린다 — sparse의
+literal 오답이 RRF에서 상위 가중치를 받기 때문이고, **M2의 D18 실험에서 이미
+관측된 것과 같은 모양이다**(그때는 semantic 질의 R@1이 1.00 → 0.75로 퇴행했다).
+두 마일스톤 뒤 다른 코퍼스에서 독립적으로 재현됐고, 그때와 같이 **리랭커가
+복구한다**(다음 칸에서 전 대역 1.000). "리랭커는 선택이 아니라 필수"라는 M2의
+결론이 M7에서도 유지된다.
+
+**헤딩 접두사는 R@10을 전혀 안 움직였는데 R@5는 +0.037, MRR은 +0.027 올렸다.**
+R@10 대역은 이미 포화라 거기서는 보이지 않았을 뿐이다. R@10만 봤다면 "효과
+없음"으로 기각했을 것이고 그게 틀린 결론이다 — 커버리지가 아니라 순위를 고치는
+손잡이다. 그래서 이 사다리는 여러 컷오프와 precision과 MRR을 항상 같이 찍는다.
+
+**리랭커가 가장 크게 기여하지만 지연이 135배다**(70ms → 9,457ms). 설정
+[`app/config.py`](app/config.py)의 `cand_k` 주석에 적힌 "CAND_K=40·실제 길이
+청크에서 8.8초"와 맞는 교차검증이고, M7에서도 정확도-지연 교환이 그대로
+살아 있다는 뜻이다.
+
+**기본값은 `fixed`로 남겼다.** 섹션 청킹이 이 코퍼스에서 공짜였는데도(R@10이
+오르고 재색인이 오히려 빨라졌다) 안 바꾼 이유는 측정과 무관하다 — 숫자가 합성
+코퍼스 하나에서 나왔고(이 저장소는 코퍼스 하나로 일반화했다가 두 번 뒤집혔다),
+청킹을 바꾸면 **이미 색인된 모든 문서를 다시 색인해야** 이득이 생긴다. 켜려면
+`CHUNK_STRATEGY=section` · `CHUNK_HEADING_PREFIX=true`.
+
+헤딩 경로는 **임베딩 입력에만** 붙고 저장되는 `content`는 안 건드린다. `content`가
+원문의 축자 부분문자열이라는 계약 위에 인용 스니펫과 골든셋 스팬 역매칭이 서
+있어서, 본문에 접두사를 넣으면 골든셋 전체가 해석 불가가 된다.
+
+⚠️ `eval/corpora/spec.py`는 헤딩을 마크다운 `#` 표기로 **직접 준다.** 실제 PDF에서
+헤딩 추출은 그 자체로 오차 있는 별도 단계이고, 섞으면 결과가 청킹 얘기인지 헤딩
+추출 얘기인지 구분할 수 없다. 실제 문서에 켜려면 헤딩 추출기가 먼저 필요하다.
+
+## 툴 설계 A/B (M7 W4)
+
+**툴 설명이 곧 프롬프트**라는 것을 수치로 확인한다. 검색 품질이 아니라 **에이전트
+행동**을 보므로 골든셋과 별도의 시나리오셋(`eval/scenarios_l3.jsonl`, 20문항)을
+쓰고, 지표는 툴 선택 정확도 · 인자 정확도 · 호출 수 · 불필요 호출 비율이다.
+
+```bash
+# MCP 검색 툴이 "query" 쿼터를 깎는다. 스윕 중간에 쿼터로 죽으면 절반의 조건이
+# "한도 초과" 툴 오류를 읽는 다른 실험이 되므로, 러너는 쿼터가 모자라면 시작을
+# 거부하고 유효값을 매 기록의 provenance 에 박는다.
+QUOTA_QUERIES_PER_DAY=2000 RATE_LIMIT_QUERY_PER_MIN=120 \
+python -m eval.l3_run --out /tmp/w4.jsonl --replicates 2 --rpm 12 --resume
+
+python -m eval.l3_run --report-only --out /tmp/w4.jsonl        # 표만 다시
+python -m eval.l3_run --experiments parameter_schema,output_length   # 미측정 2종
+```
+
+2026-09-14 실측 · `gemini-3.1-flash-lite` · 온도 0.0 · **n=2** · 160 에피소드.
+인자 정확도 분모가 조건마다 달라, 두 조건 모두 검색이 정답인 공통 22실행으로
+맞춘 값:
+
+| 실험 | 조건 | 툴 선택 | 인자 | 평균 호출 |
+|---|---|---|---|---|
+| 툴 분해 | `monolithic` (배포본) | 100% | 73% | 1.00 |
+| 툴 분해 | `decomposed` | 100% | 82% | 1.23 |
+| description 문구 | 기능 서술형 | 100% | 82% | 1.00 |
+| description 문구 | 사용 시점 명시형 | 100% | 91% | 1.18 |
+
+**분해의 값은 "검색을 더 잘 고른다"가 아니다.** 전체 기준 선택 정확도는
+80% → 100%인데 그 상승분이 전부 fetch/list 문항 4개에서 나왔다 — 단일 툴
+조건은 "그 구절 원문 보여줘"와 "내 문서 뭐뭐 있어?"에 예외 없이
+`search_documents`를 불렀다(8/8). 나머지 16문항은 두 조건 모두 100%. 즉
+**검색이 아닌 의도를 검색으로 오인하지 않는다**는 쪽의 이득이다.
+
+**시나리오 라벨은 우리 구현이 아니라 사용자 입장을 정답으로 둔다.**
+`expected_tool`이 툴 이름이 아니라 **역할**(`search`/`fetch`/`list`/`none`)이라
+툴을 리네임해도 "행동 변화"로 집계되지 않고, 그 역할이 조건에 없으면 정답은
+`none`이 된다 — 목록 툴이 없을 때 옳은 행동은 검색으로 흉내 내는 것이 아니라
+못 한다고 말하는 것이다. 20문항 중 **5문항은 툴을 안 부르는 게 정답**이다.
+각 문항의 `why`는 필수이고 20자 미만이면 로더가 거절한다: "우리 툴이 그렇게
+생겨서"가 이유인 라벨을 쓰는 순간 드러나게 하는 장치다.
+
+인자 정확도는 **이진**이다. 제약이 이질적이라(부분 문자열 / 정확한 UUID /
+인자의 부재) 부분 점수의 "0.5"가 문항마다 다른 뜻이 되고, 20문항×n=2에서
+소수점은 정밀도의 환상이다. 툴 선택이 틀렸으면 인자는 채점하지 않는다 —
+같은 실패를 두 지표에 두 번 세지 않기 위해서다.
+
+⚠️ **축소해서 쟀다.** 설계는 4실험 × n=3이었으나 무료 티어 예산으로 **2실험 ×
+n=2**로 줄였다. 파라미터 스키마·출력 길이 두 실험은 코드만 있고 **한 번도 돌지
+않았다**(위 `--experiments`로 바로 돈다, 추가 80 에피소드). 20문항에서 1~2개
+차이는 노이즈이므로 절대 수치가 아니라 방향성으로 읽을 것. 모델 버전이 바뀌면
+이전 수치와 비교가 무효라, run마다 모델명·프롬프트 해시·데이터셋 해시·git sha가
+박힌다. **지연·비용은 재지 않았다** — 측정 중 이 맥에서 다른 작업이 함께 돌아
+시간 값이 오염된다.
+
+## L2 답변 품질 judge (M7 W6) — ⚠️ 아직 검증되지 않은 수치다
+
+> **이 judge 가 내는 모든 수치는 `unvalidated` 다.** 사람 라벨과의 Cohen's
+> kappa 를 아직 재지 않았고, W6 설계 노트의 표현대로 **보정 없는 judge 점수는
+> 장식**이다. 이 절의 어떤 숫자도 품질 주장의 근거로 인용할 수 없다.
+> 표식은 문서에만 있는 것이 아니다 — 저장 레코드의 `validation.status` 에
+> 박히고, 집계 키 이름 자체가 `groundedness__unvalidated` 다. kappa 가
+> 채택선(0.6)을 넘기 전까지 `groundedness` 라는 이름의 수치는 존재하지 않는다.
+
+L1 이 검색만 재는 데 비해 L2 는 **답변**을 잰다. 차원은 M7 개요의 헤드라인
+지표 그대로 groundedness · 정답성(correctness) · 거부 정확도이고, 채점은 0\~3
+순서형이다.
+
+```bash
+python -m eval.l2_run rubric                                        # 루브릭 전문·버전·해시
+python -m eval.l2_run score  --in /tmp/golden_records.json --out /tmp/l2.jsonl
+python -m eval.l2_run report --records /tmp/l2.jsonl
+python -m eval.l2_run labels --records /tmp/l2.jsonl --out /tmp/l2_labels.jsonl
+python -m eval.l2_run kappa  --records /tmp/l2.jsonl --labels /tmp/l2_labels.jsonl
+python -m eval.l2_run compare --base /tmp/before.jsonl --head /tmp/after.jsonl
+```
+
+`score` 만 judge 모델이 필요하다. 나머지는 DB 도 모델도 네트워크도 없이 돈다.
+
+**judge 는 로컬 모델이다 — 청크가 이 맥을 떠나지 않는다.** 두 제약이 여기서
+만난다. W6 은 피평가 모델과 다른 계열을 쓰라고 하고(생성은 Gemini), M7 개요의
+미결정 항목은 "judge용 외부 LLM 호출에 문서 청크를 넣어도 되는지"를 아직 못
+정했다. 로컬 judge 는 앞을 만족하면서 뒤를 없앤다 — BGE-M3 를 로컬로 돌리는
+근거와 같은 문장이다.
+
+| | 값 | 왜 |
+| --- | --- | --- |
+| 모델 | `qwen3:4b` (Ollama) | Qwen 계열 — Gemini 와 다른 계보. 같은 맥의 `gemma3` 는 Gemini 와 같은 구글 계보라 **쓰지 않았다** |
+| 크기 | 디스크 2.5GB · 상주 3.9GB | 16GB 에 BGE-M3 + 리랭커 6.9GB 가 이미 있다. 8B 급은 같이 못 올린다 |
+| 라이선스 | Apache-2.0 | 수치를 공개하는 저장소에서 판정자 라이선스가 걸리면 수치를 못 싣는다 |
+| 실측(MPS) | 로드 2.2초 · 첫 판정 9.7초 · 이후 3.5\~8.4초(중앙값 5.4초) | 같은 MPS 를 모델 서버와 나눠 쓰므로 동시 부하에 흔들린다 |
+
+모델 서버(`scripts/local_model_server.py`)에 얹지 않고 Ollama 를 따로 쓴다.
+그쪽은 임베딩·리랭커를 기동 시점에 올려 상주시키는데, 세 번째 가중치를 같은
+프로세스에 넣으면 16GB 에서 셋이 동시 상주하고 무엇보다 **하나뿐인 MPS 를 두고
+실시간 검색과 경쟁**한다 — 이 저장소가 계속 재고 있는 지연 수치가 오염된다.
+
+### 루브릭과 버전 태그
+
+루브릭은 프롬프트에 **전문이 실린다**. "좋은 답"을 판정자가 안다고 가정하지
+않고, 차원마다 3/2/1/0점이 무엇인지 글로 적는다. 출력은 **근거 먼저, 점수
+나중**이고, 그것을 부탁이 아니라 문법으로 만든다 — 구조적 출력 스키마에서
+`evidence` 가 `score` 앞에 있어 토큰 순서가 강제된다.
+
+`rubric_version` 은 프롬프트에 실리고 레코드에 저장된다. 여기에 루브릭 본문의
+**sha256** 을 함께 남긴다. 버전 문자열만 보면 "고치고 안 올린" 경우를 놓치기
+때문이고, `compare` 는 둘 중 하나라도 다르면 비교를 거부한다(W3 의 `diff` 가
+데이터셋 해시로 하는 것과 같다). judge 모델이 다를 때도 거부한다 — 채점자가
+바뀐 것을 품질 변화로 읽을 수는 없다.
+
+현재 버전은 `l2-ko-v2` 다. v1 에서 올라간 이유는 `eval/l2.py` 상단의 이력에
+적혀 있다 — 4문항 동작 확인에서 거부 답변의 groundedness 가 0 으로 나오고(없는
+주장은 근거 없는 주장이 아니다) 답을 회피한 답변에 correctness 3점이 나왔다.
+
+A/B 비교는 **순서를 바꿔 두 번** 돌린다(위치 편향). 두 판정이 같은 *변형*을
+고르면 승부이고, 같은 *자리*를 고르면 그 문항은 승부가 아니라 편향이라
+`position_biased` 로 표시되고 결론에서 빠진다. 지금은 비교 대상이 없다 —
+W6 의 나머지 절반(서버 생성 vs 클라이언트 생성)은 `app/mcp/` 와 함께 뒤에 온다.
+
+### kappa 를 붙이려면 (사람이 할 일)
+
+```bash
+python -m eval.l2_run labels --records /tmp/l2.jsonl --out /tmp/l2_labels.jsonl --sample 40
+# 각 행의 human_score 를 루브릭대로 채운다. judge_score 는 보지 말 것.
+python -m eval.l2_run kappa --records /tmp/l2.jsonl --labels /tmp/l2_labels.jsonl
+```
+
+`labels` 는 유형을 고르게 섞어 30\~50건을 뽑는다(무작위로 뽑으면 `no_answer`
+가 한두 건만 걸려 거부 정확도의 kappa 가 계산되지 않는다). 채점 함수는 이미
+있고 단위 테스트도 붙어 있다 — 사람 라벨만 들어오면 한 걸음이다.
+
+헤드라인은 **이차 가중** kappa 다. 점수가 순서형이라 3점을 2점으로 본 것과
+3점을 0점으로 본 것을 같은 불일치로 셀 수 없기 때문이고, 가중 없는 값도 함께
+찍는다(이차 가중은 점수가 쏠린 표본에서 후하게 나온다). `kappa` 는 채택선
+0.6 미만이면 **exit 1** 이다 — 미달을 exit 0 으로 내보내면 CI 도 사람도 통과로
+읽는다.
+
+`kappa < 0.4` 면 루브릭이 모호한 것이므로 재작성하고 버전을 올린다.
+`>= 0.6` 이면 프롬프트를 잠그고 레코드의 `validation` 을 채운다. 그 전까지
+W6 의 대안은 "L2 는 샘플 사람 평가로 대체하고 L1·L3 만 자동화한다" 이다 —
+자동화가 목적이 아니라 신뢰할 수 있는 수치가 목적이다.
+
+**작은 로컬 모델이라 이 경고는 두 배로 무겁다.** W6 노트가 정확히 이 조합을
+짚는다 — "작은 모델은 사람과의 일치도가 떨어지므로 kappa 검증이 더 중요해진다."
+지금 이 judge 는 그 두 조건(작은 로컬 모델 + 미검증)을 동시에 만족한다.
 
 ## 운영
 
@@ -692,8 +1038,32 @@ CI가 이미 아는 방식으로 알린다 — 메일·Slack 연동을 따로 �
 | M4 | 평가 + 관측성 | ✅ |
 | M5 | 프론트엔드/UX (스트리밍 · 각주 · 대화) | ✅ |
 | M6 | 배포/운영 | 진행 중 |
+| M7 | MCP 서버 노출 + 평가 하네스 | 진행 중 |
 
 **M6 남은 것:** 업로드 저장소(로컬 볼륨 → 오브젝트 스토리지) 검토.
+
+**M7 진행 상황** — 주차별로 쪼개져 있고 스펙은 Notion `M7` 하위 페이지에 있다.
+
+| | 내용 | 상태 |
+| --- | --- | --- |
+| W1 | 업무 문서 골든셋 + Notion MCP 베이스라인 | 미착수 — 실제 업무 문서가 있어야 시작 |
+| W2 | MCP 서버 최소 구현 | 구현 완료, **실사용 기록 미충족** |
+| W3 | L1 평가 하네스 | ✅ |
+| W4 | 툴 설계 A/B | 측정 완료 (2실험, n=2 — 축소) |
+| W5 | 검색 파이프라인 A/B | ✅ |
+| W6 | 생성 위치 비교 + judge | judge ⚠️ **kappa 미검증** |
+| W7 | 인증 + 관측성 | 구현 완료, **실제 IdP 미연동** |
+| W8 | 마무리 · 케이스 스터디 | 미착수 |
+
+세 가지가 아직 참이 아니다. **W2의 완료 기준은 "실사용 중 불편한 지점 3개
+이상 기록"**인데 아직 Claude/Cursor에 붙여 하루 써 보지 않았다. **W6의 L2
+수치는 사람 라벨과의 일치도를 재지 않았다**(위 L2 절의 경고 참조). **W7의
+OAuth 경로는 진짜 IdP와 맞춰 본 적이 없다** — 테스트가 자체 서명 토큰으로
+검증 로직만 돌린다.
+
+M7의 측정은 전부 **합성 코퍼스**에서 나왔다. W1의 업무 문서 골든셋이 들어오면
+같은 하네스로 다시 재는 것이 설계이고, 그 전까지 이 숫자들은 방법이 도는지에
+대한 증거이지 제품 품질에 대한 주장이 아니다.
 
 ### 완료 기준 (M1)
 1. 업로드 후 status `processing → ready`

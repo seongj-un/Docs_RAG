@@ -2,9 +2,16 @@
 
     python -m eval.harness --dataset eval/datasets/synthetic_golden.jsonl
     python -m eval.harness run --dataset <path> --config hybrid+rerank --k 10
+    python -m eval.harness ab --dataset eval/datasets/spec_golden.jsonl
     python -m eval.harness diff --base latest~1 --head latest --dataset <path>
     python -m eval.harness validate --dataset <path>
     python -m eval.harness list --dataset <path>
+
+``ab`` 는 W5 의 네 실험(청킹 단위 · 헤딩 경로 접두사 · 하이브리드 · 리랭커)을
+**누적으로 하나씩** 켜면서 사다리를 오른다. 한꺼번에 켜고 "좋아졌다"고 쓰면
+어느 것이 얼마나 기여했는지 말할 수 없다는 것이 Notion W5 의 명시적 지시다.
+지표 옆에 재인덱싱 시간·인덱스 크기·질의 지연을 같이 찍는다 — W8 케이스
+스터디가 "왜 이 조합인가"를 비용까지 포함해 설명해야 하기 때문이다.
 
 L1 only: chunk-level recall@k / MRR / nDCG@10 against gold spans resolved at
 run time (``eval/gold.py``). **No LLM is called** — the numbers are
@@ -23,25 +30,46 @@ the harness, so it is the default rather than a flag.
 import argparse
 import asyncio
 import json
+import statistics
 import subprocess
 import sys
+import time
 import uuid
 from importlib import import_module
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from eval import datasets, gold, indexing, metrics, report as report_lib, store
 from eval.run import CONFIGS
 
+from app.config import settings
 from app.constants import EVAL_USER_EMAIL, EVAL_USER_ID, UNUSABLE_PASSWORD_HASH
 from app.db import SessionLocal, engine
-from app.models import Document, User
-from app.services import embeddings, rerank, retrieve
+from app.models import Chunk, Document, User
+from app.services import chunking, embeddings, rerank, retrieve
 
 DEFAULT_PROVIDER = "eval.datasets.synthetic"
 DEFAULT_CONFIG = "hybrid+rerank"
 DEFAULT_K = 10
+
+# W5 의 네 실험을 **누적으로 하나씩** 켠 사다리. Notion 의 명시적 지시다:
+# "네 실험을 한꺼번에 켜놓고 '좋아졌다'고 쓰면 기여도를 못 말한다."
+#
+# A 열(고정 700토큰 · 접두사 없음 · dense only · 리랭커 off)에서 출발해 B 열의
+# 값을 한 칸씩 켠다. 각 칸의 기여도는 바로 위 칸과의 차이로 읽는다.
+#
+# 앞의 두 칸은 **인덱스**를 바꾸므로 재인덱싱이 필요하고, 뒤의 두 칸은 질의
+# 시점만 바꾸므로 같은 인덱스를 다시 쓴다 — 러너가 그 사실을 알고 재인덱싱을
+# 건너뛴다. 건너뛰는 것이 빨라서가 아니라, 같은 인덱스라는 것이 사실이기
+# 때문이다. 괜히 다시 만들면 세 칸의 인덱스 크기가 미세하게 달라 보인다.
+AB_LADDER: tuple[tuple[str, str, bool, str], ...] = (
+    ("A0-baseline", chunking.STRATEGY_FIXED, False, "dense"),
+    ("A1-section", chunking.STRATEGY_SECTION, False, "dense"),
+    ("A2-heading-prefix", chunking.STRATEGY_SECTION, True, "dense"),
+    ("A3-hybrid", chunking.STRATEGY_SECTION, True, "hybrid"),
+    ("A4-rerank", chunking.STRATEGY_SECTION, True, "hybrid+rerank"),
+)
 
 # W1 이 정한 유형 비중(70문항 기준). 데이터셋을 강제하지는 않고 validate 가
 # 실제 분포와 나란히 찍기만 한다 — 합성 셋은 애초에 이 비율을 못 맞추고,
@@ -155,6 +183,26 @@ async def index_dataset(
     return doc_ids
 
 
+async def index_size(session) -> tuple[int, int]:
+    """(chunk count, content bytes) of the evaluation corpus as indexed.
+
+    인덱스 크기를 실제로 지배하는 것은 청크 **개수**다 — 청크마다 1024차원
+    float 밀집벡터(약 4KB)와 희소벡터가 붙는다. 본문 바이트는 그 옆의 참고
+    값이다. pg_total_relation_size 를 쓰지 않는 이유는 chunks 테이블이 다른
+    사용자의 문서와 한 테이블을 쓰기 때문이다 — 그 숫자는 이 코퍼스를
+    설명하지 않는다.
+    """
+    row = (
+        await session.execute(
+            select(func.count(Chunk.id), func.coalesce(func.sum(func.octet_length(Chunk.content)), 0))
+            .select_from(Chunk)
+            .join(Document, Document.id == Chunk.document_id)
+            .where(Document.user_id == EVAL_USER_ID)
+        )
+    ).one()
+    return int(row[0]), int(row[1])
+
+
 # --- gold resolution ---
 
 
@@ -225,7 +273,13 @@ async def retrieve_chunks(
 # --- commands ---
 
 
-async def cmd_run(args: argparse.Namespace) -> int:
+async def run_once(args: argparse.Namespace) -> list[report_lib.RunReport]:
+    """Index, score every requested config, and store — the body of ``run``.
+
+    ``cmd_ab`` 가 이 함수를 사다리 칸마다 부른다. 칸마다 별도의 실행으로
+    저장돼야 diff 와 list 가 평소처럼 다룰 수 있기 때문이고, A/B 를 위해 저장
+    경로를 따로 만들면 그 경로만 검증이 안 된 채로 남는다.
+    """
     dataset = datasets.load(args.dataset)
     provider = load_provider(args.provider)
     unknown = [doc for doc in dataset.docs if doc not in provider.names()]
@@ -234,7 +288,13 @@ async def cmd_run(args: argparse.Namespace) -> int:
 
     ks = tuple(sorted({1, 3, 5, args.k}))
     keys = metrics.metric_keys(ks, ndcg_k=args.k)
-    doc_ids = await index_dataset(dataset, provider, reindex=not args.no_reindex)
+
+    reindexed = not args.no_reindex
+    started = time.perf_counter()
+    doc_ids = await index_dataset(dataset, provider, reindex=reindexed)
+    # --no-reindex 면 재인덱싱이 일어나지 않았다. 0 을 적으면 "0초 걸렸다"는
+    # 거짓이 되므로 비워 둔다.
+    reindex_seconds = round(time.perf_counter() - started, 3) if reindexed else None
 
     questions = dataset.scored()
     if args.split != "all":
@@ -244,14 +304,18 @@ async def cmd_run(args: argparse.Namespace) -> int:
 
     reports: list[report_lib.RunReport] = []
     async with SessionLocal() as session:
+        index_chunks, index_bytes = await index_size(session)
         resolved = await resolve_gold(session, dataset, provider, doc_ids)
 
         doc_of = {doc_id: name for name, doc_id in doc_ids.items()}
         for config in args.config:
             rows: list[report_lib.QuestionResult] = []
+            latencies: list[float] = []
             for question in questions:
                 gold_sets, gold_pages = resolved[question.id]
+                asked = time.perf_counter()
                 hits = await retrieve_chunks(session, question.question, config, args.k)
+                latencies.append((time.perf_counter() - asked) * 1000)
                 ranked_ids = [h.chunk_id for h in hits]
                 ranked_pages = [(doc_of.get(h.document_id, "?"), h.page_from) for h in hits]
                 scored = metrics.score_chunks(
@@ -290,6 +354,13 @@ async def cmd_run(args: argparse.Namespace) -> int:
                 k=args.k,
                 git_sha=git_sha(),
                 label=args.label,
+                chunk_strategy=settings.chunk_strategy,
+                heading_prefix=settings.chunk_heading_prefix,
+                reindex_seconds=reindex_seconds,
+                index_chunks=index_chunks,
+                index_bytes=index_bytes,
+                latency_ms_p50=round(statistics.median(latencies), 1) if latencies else None,
+                latency_ms_mean=round(statistics.fmean(latencies), 1) if latencies else None,
                 num_questions=len(dataset),
                 num_scored=len(rows),
                 metrics=report_lib.aggregate(rows, keys),
@@ -313,8 +384,103 @@ async def cmd_run(args: argparse.Namespace) -> int:
             encoding="utf-8",
         )
         print(f"[json] {args.json_out}")
+    return reports
 
+
+async def cmd_run(args: argparse.Namespace) -> int:
+    await run_once(args)
     await engine.dispose()
+    return 0
+
+
+# --- A/B ---
+
+
+def print_ladder(reports: list[report_lib.RunReport], k: int) -> None:
+    """The cumulative ladder, one row per rung, with cost beside quality.
+
+    recall 과 precision 을 같은 표에 둔다. Notion 함정 1번이 "recall 만 올리고
+    precision 을 버리면 컨텍스트가 늘어 비용·지연이 나빠진다"이고, 두 칸이
+    떨어져 있으면 사람 눈은 올라간 쪽만 본다. Δ 열은 **바로 위 칸과의 차이**다 —
+    기여도를 칸마다 따로 말할 수 있어야 이 사다리를 도는 의미가 있다.
+    """
+    print(f"\n=== 누적 A/B 사다리 (k={k}) ===")
+    head = (
+        f"{'arm':20}{'chunking':18}{f'R@{k}':>8}{'Δ':>8}"
+        f"{f'P@{k}':>8}{'Δ':>8}{'MRR':>8}{'청크':>7}{'재색인s':>9}{'지연ms':>9}"
+    )
+    print(head)
+    previous: report_lib.RunReport | None = None
+    for report in reports:
+        recall = report.metrics.get(f"R@{k}", 0.0)
+        precision = report.metrics.get(f"P@{k}", 0.0)
+        d_r = recall - previous.metrics.get(f"R@{k}", 0.0) if previous else 0.0
+        d_p = precision - previous.metrics.get(f"P@{k}", 0.0) if previous else 0.0
+        chunking_label = (
+            f"{report.chunk_strategy}{'+prefix' if report.heading_prefix else ''}"
+        )
+        print(
+            f"{(report.label or report.config)[:19]:20}{chunking_label:18}"
+            f"{recall:8.3f}{(f'{d_r:+.3f}' if previous else '-'):>8}"
+            f"{precision:8.3f}{(f'{d_p:+.3f}' if previous else '-'):>8}"
+            f"{report.metrics.get('MRR', 0.0):8.3f}"
+            f"{(report.index_chunks if report.index_chunks is not None else '-'):>7}"
+            f"{(f'{report.reindex_seconds:.1f}' if report.reindex_seconds is not None else '(재사용)'):>9}"
+            f"{(f'{report.latency_ms_p50:.0f}' if report.latency_ms_p50 is not None else '-'):>9}"
+        )
+        previous = report
+    print(
+        "\nΔ 는 바로 위 칸과의 차이다. 한 칸에서 recall 이 오르는데 precision 이 "
+        "같이 내려가면\n그 칸은 컨텍스트를 넓혀서 recall 을 산 것이고, 비용·지연 "
+        "열과 함께 읽어야 한다."
+    )
+
+
+async def cmd_ab(args: argparse.Namespace) -> int:
+    """Walk ``AB_LADDER``, turning one experiment on per rung."""
+    rungs = [rung for rung in AB_LADDER if not args.only or rung[0] in args.only]
+    if not rungs:
+        raise SystemExit(f"--only 에 해당하는 칸이 없다: {args.only}")
+
+    original = (settings.chunk_strategy, settings.chunk_heading_prefix)
+    reports: list[report_lib.RunReport] = []
+    previous_chunking: tuple[str, bool] | None = None
+    try:
+        for name, strategy, prefix, config in rungs:
+            settings.chunk_strategy = strategy
+            settings.chunk_heading_prefix = prefix
+            # 청킹이 그대로면 인덱스도 그대로다. 다시 만들면 시간만 쓰는 것이
+            # 아니라, 같은 인덱스인데 크기가 미세하게 달라 보여 사다리를
+            # 읽는 사람을 헷갈리게 한다.
+            reuse = previous_chunking == (strategy, prefix)
+            print(f"\n\n########## {name} · {strategy}"
+                  f"{'+prefix' if prefix else ''} · {config}"
+                  f"{' · 인덱스 재사용' if reuse else ' · 재인덱싱'} ##########")
+            rung_args = argparse.Namespace(
+                dataset=args.dataset,
+                config=[config],
+                k=args.k,
+                split=args.split,
+                provider=args.provider,
+                label=name,
+                no_store=args.no_store,
+                no_reindex=reuse,
+                json_out=None,
+                verbose=args.verbose,
+            )
+            reports += await run_once(rung_args)
+            previous_chunking = (strategy, prefix)
+    finally:
+        settings.chunk_strategy, settings.chunk_heading_prefix = original
+        await engine.dispose()
+
+    print_ladder(reports, args.k)
+    if args.json_out:
+        Path(args.json_out).write_text(
+            json.dumps([r.to_dict() for r in reports], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"[json] {args.json_out}")
     return 0
 
 
@@ -454,6 +620,24 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--json-out", default=None, help="실행 결과를 JSON 파일로도 쓴다")
     run.add_argument("-v", "--verbose", action="store_true")
 
+    ab = sub.add_parser(
+        "ab", help="W5 의 네 실험을 누적으로 하나씩 켜면서 돌린다 (Notion 지시)"
+    )
+    ab.add_argument("--dataset", required=True)
+    ab.add_argument("--k", type=int, default=DEFAULT_K)
+    ab.add_argument(
+        "--split", default="tune", choices=("tune", "holdout", "all"),
+        help="기본 tune — holdout 은 W8 최종 측정에서만 연다",
+    )
+    ab.add_argument("--provider", default=DEFAULT_PROVIDER)
+    ab.add_argument(
+        "--only", action="append", choices=[rung[0] for rung in AB_LADDER],
+        help="사다리의 특정 칸만 (반복 가능). 기본은 전부",
+    )
+    ab.add_argument("--no-store", action="store_true")
+    ab.add_argument("--json-out", default=None)
+    ab.add_argument("-v", "--verbose", action="store_true")
+
     diff = sub.add_parser("diff", help="두 실행 사이의 지표 변화와 뒤집힌 문항")
     diff.add_argument("--base", default="latest~1")
     diff.add_argument("--head", default="latest")
@@ -490,6 +674,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         args.config = args.config or [DEFAULT_CONFIG]
         return asyncio.run(cmd_run(args))
+    if args.command == "ab":
+        return asyncio.run(cmd_ab(args))
     if args.command == "diff":
         return asyncio.run(cmd_diff(args))
     if args.command == "validate":

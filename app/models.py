@@ -11,6 +11,7 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import SPARSEVEC, Vector
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Float,
     ForeignKey,
@@ -409,6 +410,23 @@ class EvalRun(Base):
     git_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
     label: Mapped[str | None] = mapped_column(Text, nullable=True)
     k: Mapped[int] = mapped_column(Integer, nullable=False)
+    # --- M7 W5 (마이그레이션 0013) ---
+    # 청킹은 `config` 가 아니라 **인덱스**를 바꾼다. 같은 "hybrid+rerank" 라도
+    # 청킹이 다르면 정답 청크 자체가 다른 실행이라, 조건을 같은 행에 남기지
+    # 않으면 두 숫자를 나란히 놓는 순간 거짓말이 된다.
+    chunk_strategy: Mapped[str | None] = mapped_column(Text, nullable=True)
+    heading_prefix: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # Notion W5 가 "같이 기록할 것"으로 지목한 비용들. W8 케이스 스터디가
+    # "왜 이 조합인가"를 비용까지 포함해 설명해야 해서, 지표와 같은 행에 있어야
+    # 한다. NULL 이 가능한 이유는 --no-reindex 실행에는 재인덱싱 시간이
+    # 존재하지 않기 때문이다 — 0 으로 채우면 "0초 걸렸다"는 거짓이 된다.
+    reindex_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 인덱스 크기는 청크 **개수**가 지배한다(청크당 1024차원 float 밀집벡터
+    # ≈ 4KB + 희소벡터). 본문 바이트는 그 옆에 참고로 둔다.
+    index_chunks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    index_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    latency_ms_p50: Mapped[float | None] = mapped_column(Float, nullable=True)
+    latency_ms_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
     num_questions: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # L1 에서 실제로 채점된 문항 수. no_answer 문항은 정답 청크가 없어
     # 여기서 빠진다 — 전체 문항 수와 갈라지는 것이 정상이고, 두 수를 같이

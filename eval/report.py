@@ -49,6 +49,22 @@ class RunReport:
     label: str | None = None
     run_id: str | None = None
     created_at: str | None = None
+    # --- M7 W5: 지표와 같은 행에 남기는 조건과 비용 ---
+    # Notion W5: "같이 기록할 것 — 재인덱싱 소요 시간, 인덱스 크기, 질의당
+    # 지연, 비용." 이유는 W8 케이스 스터디에서 "왜 이 조합인가"를 **비용까지
+    # 포함해** 설명해야 하기 때문이다. 나중에 붙이면 그때 돌린 실행에만 있고
+    # 비교 대상인 예전 실행에는 없다 — 그래서 지금 넣는다.
+    #
+    # 전부 None 이 가능하다. 청킹 설정은 W5 이전 실행에는 아예 없던 개념이고,
+    # 시간·크기는 --no-reindex 로 돌린 실행에는 존재하지 않는다. 0 으로
+    # 채우면 "재인덱싱이 0초였다"는 거짓말이 된다.
+    chunk_strategy: str | None = None
+    heading_prefix: bool | None = None
+    reindex_seconds: float | None = None
+    index_chunks: int | None = None
+    index_bytes: int | None = None
+    latency_ms_p50: float | None = None
+    latency_ms_mean: float | None = None
     num_questions: int = 0
     num_scored: int = 0
     metrics: dict[str, float] = field(default_factory=dict)
@@ -162,6 +178,15 @@ def check_comparable(base: RunReport, head: RunReport, *, strict: bool = True) -
             f"({base.dataset_sha256[:12]} -> {head.dataset_sha256[:12]}). "
             "질문이 달라진 것을 지표 변화로 읽지 않으려면 base 를 다시 돌려야 "
             "한다. 그래도 비교하려면 --allow-dataset-change."
+        )
+    # 청킹이 다르면 정답 청크 자체가 다른 것이라 회귀 판정이 성립하지 않는다.
+    # 양쪽이 모두 기록돼 있을 때만 본다 — W5 이전 실행에는 이 칸이 비어 있고,
+    # 그 실행을 비교 불가로 만들면 하네스가 자기 역사와 끊긴다.
+    chunking = [(r.chunk_strategy, r.heading_prefix) for r in (base, head)]
+    if all(pair != (None, None) for pair in chunking) and chunking[0] != chunking[1]:
+        raise IncomparableRuns(
+            f"청킹이 다르다: base={chunking[0]} head={chunking[1]} — "
+            "A/B 는 eval.harness ab 의 사다리로 보고, diff 는 같은 청킹끼리만."
         )
 
 

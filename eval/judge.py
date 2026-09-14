@@ -1,4 +1,13 @@
-"""RAG quality metrics via an LLM judge (Gemini).
+"""RAG quality metrics via an LLM judge (Gemini). **M4. Do not repoint.**
+
+M7 W6 added a second, separate judge — ``eval/judge_local.py`` — with different
+dimensions (groundedness · 정답성 · 거부 정확도), a different scale, and a local
+model. This file was left exactly as it was rather than extended, because the
+numbers it produces are cited as evidence elsewhere: ``rerank_top`` is 3 today
+*because* this judge measured context_precision 0.246 at 8. Changing the model
+or the metric definitions under these names would make every document that
+quotes them quietly false. Two judges that mean two things beat one judge that
+means whichever thing you last edited.
 
 Implements the four RAGAS metrics directly rather than through the ragas
 package, which cannot be installed here: every ragas release imports

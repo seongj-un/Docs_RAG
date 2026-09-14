@@ -215,6 +215,12 @@ class QueryRunner:
         records keep everything each stage actually saw, so a trace still shows
         a chunk that retrieval found and the cap cut off.
         """
+        # 관측 전용(M7 W7). 이 값이 정해지는 유일한 자리라 여기서 적는다 —
+        # 스팬 속성으로만 나가고 traces 에는 컬럼이 없다(tracing.TraceDraft).
+        self.draft.top_k = limit or (
+            settings.rerank_top if self.use_hybrid else settings.top_k
+        )
+
         if not self.use_hybrid or self.sparse is None:
             async with self.watch.time("retrieve"):
                 hits = await retrieve.search(
@@ -299,6 +305,7 @@ class QueryRunner:
         self.draft.llm_model = settings.llm_model
         self.draft.tokens_in = tokens_in
         self.draft.tokens_out = tokens_out
+        self.draft.chunk_count = len(found.chunks)  # 관측 전용
         self.draft.stage_ids = found.stage_ids
         self.draft.stage_chunks = found.stage_chunks
         await tracing.record(self.session, self.draft, self.watch)
@@ -329,6 +336,7 @@ class QueryRunner:
         """
         await usage.commit_reservation(self.session, self._reservation_id)
         self._reservation_id = None
+        self.draft.chunk_count = len(found.chunks)  # 관측 전용
         self.draft.stage_ids = found.stage_ids
         self.draft.stage_chunks = found.stage_chunks
         await tracing.record(self.session, self.draft, self.watch)

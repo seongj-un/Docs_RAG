@@ -11,6 +11,10 @@ wrong. Reusing the session row means logging out kills the agent's access in
 the same DELETE that kills the browser's (``services/auth.py``: 폐기가 곧
 DELETE), and the M3 spec's reason for choosing sessions over JWT keeps
 applying to a surface it was written before.
+
+M7 W7 은 이 경로를 없애지 않았다. OAuth 리소스 서버 경로(``oauth.py``)가
+옆에 생겼을 뿐이고, 어느 쪽을 쓸지는 ``MCP_AUTH_MODE`` 가 정한다 — 기본은
+여전히 이 파일이다. 근거는 ``config.py`` 의 ``mcp_auth_mode`` 주석.
 """
 
 import logging
@@ -19,10 +23,25 @@ import uuid
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 
 from app.db import SessionLocal
+from app.mcp.scopes import ALL_SCOPES
 from app.models import Session
 from app.services import auth
 
 logger = logging.getLogger(__name__)
+
+# 세션 토큰이 받는 스코프 = 이 서버가 아는 스코프 전부.
+#
+# 스코프는 "**클라이언트**가 사용자보다 적게 가질 수 있게" 하려고 있는 장치다.
+# 세션 id 는 클라이언트의 위임 자격이 아니라 사용자 본인의 자격증명이고 — 같은
+# 값이 브라우저 쿠키에 들어 있다 — 그 사람은 웹 UI 에서 이미 전부 할 수 있다.
+# 여기서 일부만 주면 "세션으로는 못 하는데 UI 로는 되는" 구멍 아닌 불편만
+# 생긴다.
+#
+# 새 스코프가 생기면 자동으로 여기 포함된다. 그것이 의도다: 세션은 곧 계정
+# 전체이므로, 스코프를 하나 더 만들 때 이 목록을 잊어서 세션 사용자가 자기
+# 기능을 못 쓰게 되는 쪽의 사고를 없앤다. 반대 방향(세션에 과한 권한이 붙는
+# 것)은 정의상 일어날 수 없다 — 세션 소유자는 곧 계정 소유자다.
+SESSION_SCOPES = sorted(ALL_SCOPES)
 
 
 class SessionTokenVerifier(TokenVerifier):
@@ -79,7 +98,7 @@ class SessionTokenVerifier(TokenVerifier):
                 # 사용자를 대신해 부르는 것이므로 주체와 같은 값을 넣는다 —
                 # 없는 개념을 그럴듯한 가짜 값으로 채우지 않는다.
                 client_id=str(user.id),
-                scopes=[],
+                scopes=list(SESSION_SCOPES),
                 # 세션 행의 만료를 그대로 싣는다. 미들웨어가 이 값을 보고
                 # 과거면 거부하므로, 세션이 만료되는 순간 토큰도 만료된다 —
                 # 두 개의 수명을 따로 관리하지 않는다는 것이 이 파일의 요점.

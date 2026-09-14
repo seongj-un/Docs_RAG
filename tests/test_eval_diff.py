@@ -169,3 +169,28 @@ def test_bare_dataset_flag_means_run(monkeypatch):
     monkeypatch.setattr(harness, "cmd_run", fake_run)
     assert harness.main(["--dataset", "x.jsonl"]) == 0
     assert seen == {"dataset": "x.jsonl", "config": [harness.DEFAULT_CONFIG]}
+
+
+# --- M7 W5: 청킹이 다르면 비교 자체가 성립하지 않는다 ---
+
+
+def test_a_different_chunking_refuses_comparison():
+    """청킹이 바뀌면 정답 청크 자체가 다르다 — 회귀 판정의 전제가 무너진다."""
+    rows = [result("q1", 1.0, 1)]
+    base, head = run(rows), run(rows)
+    base.chunk_strategy, base.heading_prefix = "fixed", False
+    head.chunk_strategy, head.heading_prefix = "section", False
+
+    with pytest.raises(report_lib.IncomparableRuns, match="청킹이 다르다"):
+        report_lib.diff(base, head)
+
+
+def test_runs_from_before_w5_still_compare():
+    """W5 이전 실행에는 청킹 칸이 비어 있다. 그 실행을 비교 불가로 만들면
+    하네스가 자기 역사와 끊긴다."""
+    rows = [result("q1", 1.0, 1)]
+    head = run(rows)
+    head.chunk_strategy, head.heading_prefix = "section", True
+
+    # 한쪽만 비어 있으면 통과한다 — 모르는 것을 다르다고 단정하지 않는다.
+    assert report_lib.diff(run(rows), head).has_regression is False

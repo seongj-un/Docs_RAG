@@ -13,11 +13,17 @@ from starlette.routing import Route
 
 from app.db import run_migrations
 from app.config import settings
-from app.mcp.server import MCP_HTTP_METHODS, build_mcp_app, build_mcp_server
+from app.mcp.server import (
+    MCP_HTTP_METHODS,
+    RESOURCE_METADATA_METHODS,
+    build_mcp_app,
+    build_mcp_server,
+    resource_metadata_path,
+)
 from app.routers import (
     admin, auth, chunks, conversations, documents, query, traces, usage,
 )
-from app.services import mailer
+from app.services import mailer, otel
 
 # MCP 서버는 앱보다 먼저 만들어져야 한다. streamable_http_app() 을 부르는
 # 것이 session_manager 를 만드는 행위이고, 아래 lifespan 이 그 manager 를
@@ -31,6 +37,9 @@ mcp_app = build_mcp_app(mcp_server) if mcp_server is not None else None
 async def lifespan(app: FastAPI):
     # 요청마다가 아니라 프로세스당 한 번 — 설정은 기동 중에 바뀌지 않는다.
     mailer.warn_if_base_url_looks_local()
+    # OTEL_ENABLED 가 꺼져 있으면 즉시 돌아온다. 켜져 있을 때만 TracerProvider 가
+    # 생기고, 그 전까지 opentelemetry-api 는 진짜 no-op 이다(app/services/otel.py).
+    otel.setup_tracing()
     await run_migrations()
 
     if mcp_server is None:
@@ -103,3 +112,19 @@ if mcp_app is not None:
     app.router.routes.append(
         Route(settings.mcp_path, endpoint=mcp_app, methods=MCP_HTTP_METHODS)
     )
+
+    # RFC 9728 보호 자원 메타데이터(M7 W7). session 모드에서는 None 이라 아무것도
+    # 걸리지 않는다 — 가리킬 인가 서버가 없을 때 메타데이터를 광고하지 않는 판단은
+    # app/config.py 의 mcp_auth_mode 주석에 있다.
+    #
+    # 같은 서브앱으로 보내되 **경로가 다른 두 번째 Route** 인 이유는
+    # app/mcp/server.py 의 resource_metadata_path 주석에 있다: SDK 는 이
+    # 라우트를 서브앱 안에 등록하는데, 우리 마운트는 POST /mcp 하나만
+    # 들여보내므로 그대로 두면 등록은 됐지만 닿을 수 없는 라우트가 된다.
+    _metadata_path = resource_metadata_path()
+    if _metadata_path is not None:
+        app.router.routes.append(
+            Route(
+                _metadata_path, endpoint=mcp_app, methods=RESOURCE_METADATA_METHODS
+            )
+        )

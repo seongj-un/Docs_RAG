@@ -124,6 +124,57 @@ class Settings(BaseSettings):
     # Chunking (token targets, approximated by words in M1)
     chunk_size: int = 700
     chunk_overlap: int = 100
+    # --- M7 W5: 청킹 단위와 헤딩 경로 접두사 ---
+    # 둘 다 **기존 동작이 기본값**이다. 프로덕션 인덱싱 경로는 이 두 줄을
+    # 더해도 M1 때와 같은 청크를 만든다 — 실험을 붙이면서 재인덱싱 없이
+    # 검색 품질이 조용히 달라지는 것이 이 저장소에서 가장 비싼 사고다.
+    #
+    # "section" 은 고정 토큰 창 대신 헤딩 경계에서 자른다. 가설(Notion W5):
+    # 명세 문서는 섹션이 의미 단위라 섹션 청킹이 유리하다 — 특히 표가 창
+    # 한가운데에서 잘리면 머리행과 데이터행이 서로 다른 청크로 갈라져 어느
+    # 쪽도 "student_id 가 무엇인가"에 답하지 못한다.
+    #
+    # 2026-09-14 실측 (`python -m eval.harness ab --dataset
+    # eval/datasets/spec_golden.jsonl --k 10`, 명세 코퍼스 30쪽·채점 27문항).
+    # 누적 사다리라 각 칸은 바로 위 칸에서 **하나만** 더 켠 것이다:
+    #
+    #   칸                  청킹             R@1    R@5   R@10   P@10    MRR  재색인s  지연ms
+    #   A0-baseline         fixed          0.444  0.722  0.759  0.093  0.629    16.9      54
+    #   A1-section          section        0.481  0.759  0.796  0.093  0.663    13.6      52
+    #   A2-heading-prefix   section+prefix 0.500  0.796  0.796  0.093  0.690    13.7      53
+    #   A3-hybrid           section+prefix 0.537  0.778  0.870  0.104  0.751  (재사용)     70
+    #   A4-rerank           section+prefix 0.704  1.000  1.000  0.126  0.901  (재사용)   9457
+    #
+    # 섹션 청킹은 이 코퍼스에서 **공짜였다** — 지표가 오르고 재색인이 오히려
+    # 빨라졌으며(16.9 → 13.6초) 질의 지연은 같다. 청크 개수도 60 으로 동일해서,
+    # 이득이 "청크가 작아져서"가 아니라 경계가 옳아서임을 알 수 있다.
+    #
+    # 헤딩 접두사는 **R@10 을 전혀 안 움직였는데 R@5 +0.037 · MRR +0.027 이다.**
+    # R@10 대역은 이미 포화라 거기서는 안 보였을 뿐이다. R@10 만 봤다면 "효과
+    # 없음"으로 기각했을 것이고 그게 틀린 결론이다 — 커버리지가 아니라 순위를
+    # 고치는 손잡이다.
+    #
+    # ⚠️ **사다리가 단조가 아니다.** A3-hybrid 칸에서 R@5 가 떨어진다
+    # (0.796 → 0.778). 같은 칸에서 R@1 +0.037 · R@10 +0.074 · MRR +0.061 로
+    # 나머지는 전부 오른다 — 하이브리드가 정답을 더 깊이 끌어오면서 4~5위
+    # 대역을 흐트러뜨린다. sparse 의 literal 오답이 RRF 에서 상위 가중치를 받기
+    # 때문이고, M2 의 D18 실험에서 이미 본 모양이다(그때는 semantic R@1 이
+    # 1.00 → 0.75 로 퇴행했다). 두 마일스톤 뒤 다른 코퍼스에서 독립적으로
+    # 재현됐고, 그때처럼 다음 칸의 리랭커가 전 대역을 1.000 으로 복구한다.
+    # "리랭커는 선택이 아니라 필수"라는 M2 의 결론이 여기서도 유지된다.
+    #
+    # ⚠️ 그런데도 기본값은 fixed 다. 두 가지 이유이고 둘 다 측정과 무관하다:
+    # (1) 이 숫자는 합성 코퍼스 하나·채점 27문항에서 나왔다. 이 저장소는 코퍼스
+    #     하나로 일반화했다가 두 번 뒤집혔다(RERANK_MAX_CHARS, CAND_K — 위
+    #     cand_k 주석 참고). 실제 업무 문서에서 재확인되기 전까지는 후보다.
+    # (2) 청킹을 바꾸면 **이미 색인된 모든 문서를 다시 색인해야** 이득이 생긴다.
+    #     설정 한 줄이 아니라 마이그레이션에 가까운 작업이라, 근거가 코퍼스
+    #     하나일 때 기본값으로 밀 것이 아니다.
+    chunk_strategy: str = "fixed"  # fixed | section
+    # 청크 앞(임베딩 입력에만)에 "명세 > 학생 > 목록 조회" 를 붙인다. 저장되는
+    # content 는 건드리지 않는다 — content 가 원문의 축자 부분문자열이라는
+    # 계약 위에 인용 스니펫과 eval/gold.py 의 스팬 역매칭이 서 있다.
+    chunk_heading_prefix: bool = False
 
     # Retrieval
     top_k: int = 8
@@ -263,19 +314,103 @@ class Settings(BaseSettings):
     # 를 사실상 없애면서도, 배포 뒤 낡은 목록을 들고 있는 시간을 1분으로
     # 묶는다. 0 이면 캐시하지 말라는 뜻이다.
     mcp_tools_cache_ttl_ms: int = 60_000
-    # RFC 9728 보호 자원 메타데이터 라우트. 빈 값이면 끈다 —
-    # AuthSettings(resource_server_url=None) 이 SDK 의 OFF 스위치다. 지금은
-    # 끈 채로 간다: 우리는 OAuth 발급자가 아니고, 토큰이 곧 기존 세션 행이라
-    # 광고할 메타데이터가 없다. W7 에서 켤 때 코드를 고치지 않고 이 값만
-    # 채우면 되도록 미리 설정으로 빼 둔다. 켤 때는 이 서버의 공개 URL을 넣는다:
+    # RFC 9728 보호 자원 메타데이터 라우트가 광고할 이 서버의 공개 URL.
+    # 라우트가 실제로 켜지는지는 이 값이 아니라 mcp_auth_mode 가 정한다 —
+    # 근거는 아래 mcp_auth_mode 주석. 켤 때는 이 서버의 공개 URL 을 넣는다:
     #   MCP_RESOURCE_SERVER_URL=https://docs.example.com/api/mcp
     mcp_resource_server_url: str = ""
-    # AuthSettings.issuer_url 은 쓰지 않아도 필수·non-nullable 이다. 우리는
-    # 토큰을 발급하지 않고 기존 세션 행을 재사용하므로 이 값은 아무 데도
-    # 실려 나가지 않는다(resource_server_url 이 None 이라 메타데이터 라우트가
-    # 없다). 유효한 URL 이기만 하면 되고, .invalid 는 절대 해석되지 않는
-    # 예약 TLD(RFC 2606)라 실수로 누가 이 주소를 찔러볼 수도 없다.
+    # AuthSettings.issuer_url 은 쓰지 않아도 필수·non-nullable 이다. session
+    # 모드에서 우리는 토큰을 발급하지 않고 기존 세션 행을 재사용하므로 이 값은
+    # 아무 데도 실려 나가지 않는다(resource_server_url 이 None 이라 메타데이터
+    # 라우트가 없다). 유효한 URL 이기만 하면 되고, .invalid 는 절대 해석되지
+    # 않는 예약 TLD(RFC 2606)라 실수로 누가 이 주소를 찔러볼 수도 없다.
+    # oauth/both 모드에서는 이 값을 쓰지 않고 mcp_oauth_issuer 가 대신한다.
     mcp_issuer_url: str = "https://mcp.docs-rag.invalid/"
+
+    # --- M7 W7: OAuth 리소스 서버 ---
+    # **이 서버는 토큰을 발급하지 않는다.** 인가 서버를 직접 만드는 것은 W7 이
+    # 명시적으로 범위 밖에 둔 일이라, 여기 있는 것은 전부 "남이 발급한 토큰을
+    # 어떻게 검증할 것인가"뿐이다.
+    #
+    # 검증기가 둘이다. 어느 것을 쓸지 이 값이 정한다:
+    #
+    #   session  세션 행 베어러만 받는다. M7 W2 가 만든, 지금 유일하게 실제로
+    #            동작하는 경로다(Authorization: Bearer <session_id>).
+    #   oauth    외부 IdP 가 발급한 JWT 만 받는다. 세션 베어러는 거절된다.
+    #   both     JWT 를 먼저 시도하고, 아니면 세션으로 해석한다. IdP 를 붙이는
+    #            동안의 이행 구간용이다.
+    #
+    # **기본이 session 인 이유.** 두 방향의 사고를 견줬다. (가) oauth 를 기본
+    # 으로 두면, IdP 설정이 비어 있는 클론은 아무 토큰도 통과시키지 못해 MCP 가
+    # 그냥 죽는다 — 시끄럽지만 지금 붙어 있는 클라이언트를 전부 끊는다.
+    # (나) session 을 기본으로 두면 오늘 동작하는 것이 계속 동작한다. 위험한
+    # 방향은 "IdP 토큰을 검증하고 있다고 믿는데 사실은 아무거나 받는" 상태인데,
+    # 그건 이 기본값으로는 생길 수 없다: oauth/both 를 **켰는데** 설정이 모자라면
+    # 앱이 기동 자체를 거부한다(app/mcp/oauth.py 의 validate_settings). 즉 조용히
+    # 약해지는 경로가 없으므로 기본은 "오늘 되는 것"으로 둔다.
+    #
+    # RFC 9728 메타데이터와 401 의 WWW-Authenticate resource_metadata= 도 이
+    # 값에 매달아 뒀다. session 모드에서는 가리킬 인가 서버가 없으므로 켜지
+    # 않는다 — 없는 인가 서버를 광고하면 클라이언트는 쓸 수 있는 세션 베어러
+    # 대신 실패할 OAuth 디스커버리로 끌려간다.
+    mcp_auth_mode: str = "session"
+    # 토큰을 발급한 인가 서버. iss 클레임과 정확히 같은 문자열이어야 한다
+    # (RFC 8414 는 문자열 비교를 요구한다 — 끝의 / 하나가 검증을 깨뜨린다).
+    mcp_oauth_issuer: str = ""
+    # 서명 키를 가져올 JWKS 문서. 로컬 검증이라 요청마다 IdP 를 때리지 않는다.
+    mcp_oauth_jwks_url: str = ""
+    # aud 클레임이 이 값과 같아야 한다 = "우리 서버용으로 발급된 토큰인가".
+    # 비워 두면 mcp_resource_server_url 을 쓴다. RFC 8707 에서 리소스 지시자는
+    # 곧 리소스 서버의 URL 이므로 둘이 같은 것이 정상이고, 따로 둘 수 있게
+    # 해 둔 것은 aud 를 다른 값으로 쓰는 IdP 가 있기 때문이다.
+    mcp_oauth_audience: str = ""
+    # 허용 서명 알고리즘. **목록으로 못박는 것이 요점이다** — 토큰의 alg 헤더를
+    # 그대로 믿으면 alg=none 이나 HS256 혼동 공격이 열린다.
+    mcp_oauth_algorithms: list[str] = ["RS256"]
+
+    # --- M7 W7: 관측성(OpenTelemetry) ---
+    # 기본이 False 이고, False 는 "싸다"가 아니라 **no-op** 이다. TracerProvider
+    # 를 아예 설치하지 않으므로 opentelemetry-api 의 프록시가 무효 스팬을
+    # 돌려주고, 우리 헬퍼들은 전부 거기서 빠져나간다(app/services/otel.py).
+    # 수집기가 없는 클론에서 앱이 정상 동작해야 한다는 것이 W7 의 요구다.
+    otel_enabled: bool = False
+    otel_service_name: str = "docs-rag"
+    # console | otlp. otlp 는 opentelemetry-exporter-otlp-proto-http 를 따로
+    # 설치해야 한다 — requirements.txt 에 넣지 않은 이유는 protobuf/requests 를
+    # 끌고 오는데 계측을 켜는 배포에서만 필요하기 때문이다. 없으면 기동 시
+    # 에러 로그를 남기고 계측 없이 계속 간다(관측이 관측 대상을 내리지 않는다).
+    otel_exporter: str = "console"
+
+    # --- M7 W6: L2 judge (로컬 생성 모델) ---
+    # 평가 전용이다. 애플리케이션 경로는 이 값들을 하나도 읽지 않는다 —
+    # eval/judge_local.py 만 읽는다. 그럼에도 여기 두는 이유는 .env 하나로
+    # 환경이 서술돼야 하기 때문이고, eval_llm_model 이 이미 같은 자리에 있다.
+    #
+    # **judge 가 로컬인 이유는 두 가지가 겹쳐서다.** W6 은 피평가 모델과 다른
+    # 계열을 쓰라고 하고(생성은 Gemini), M7 개요의 미결정 항목은 "judge용 외부
+    # LLM 호출에 문서 청크를 넣어도 되는지"를 아직 못 정했다. 로컬 judge 는
+    # 앞을 만족하면서 뒤를 없앤다 — 청크가 이 맥을 떠나지 않는다. BGE-M3 를
+    # 로컬로 돌리는 근거와 같은 문장이다.
+    judge_provider: str = "ollama"
+    judge_base_url: str = "http://127.0.0.1:11434"
+    # Qwen 계열을 쓴다. 같은 맥에 gemma3 가 이미 받아져 있지만 Gemma 는 Gemini
+    # 와 같은 구글 계보라, W6 이 피하라고 한 자기채점에 가장 가까운 선택이 된다.
+    # 4B(Q4_K_M, 디스크 2.5GB · num_ctx 8192 에서 상주 3.9GB)인 것은 16GB 에
+    # BGE-M3 + 리랭커 6.9GB 가 이미 상주하기 때문이다. 실측 2026-09-14:
+    # 로드 2.2초, 로드 포함 첫 판정 9.7초, 이후 판정 3.5~8.4초(중앙값 5.4초).
+    # ⚠️ 작은 모델은 사람과의 일치도가 낮고 우리는 아직 그것을 재지 않았다 —
+    # 자세한 것은 eval/judge_local.py 의 모듈 docstring.
+    judge_model: str = "qwen3:4b"
+    # 첫 호출은 가중치 로드를 함께 치른다(실측 2.2초). 긴 컨텍스트 문항이
+    # CPU 로 떨어지는 경우까지 감안한 상한이다.
+    judge_timeout_s: float = 180.0
+    # 컨텍스트 3청크 + 루브릭 + 답변이 들어간다. 넘치면 ollama 가 조용히 앞을
+    # 잘라내는데, 잘려 나가는 것은 프롬프트 앞쪽 = 루브릭이다. 루브릭 없는
+    # 판정은 이 설계의 전제를 통째로 잃은 판정이라 넉넉히 잡는다.
+    judge_num_ctx: int = 8192
+    # 스윕 사이에 모델을 메모리에 남겨 둘 시간. 0 으로 두면 문항마다 2.2초씩
+    # 로드를 다시 치른다.
+    judge_keep_alive: str = "5m"
 
 
 settings = Settings()
