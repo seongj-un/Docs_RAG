@@ -1,12 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { Button } from "@/components/ui/Button";
 import { auth, describeError, type ErrorCopy } from "@/lib/api";
 import { useSession } from "@/lib/session";
+import {
+  readVerifyToken,
+  scrubQueryToken,
+  tokenState,
+  type VerifyToken,
+} from "@/lib/verifyLink";
 import styles from "./verify.module.css";
 
 /* (app) 그룹 밖에 있다. 메일 링크는 로그인하지 않은 다른 브라우저에서
@@ -18,32 +23,91 @@ type State =
   | { kind: "done" }
   | { kind: "failed"; copy: ErrorCopy };
 
-/* 토큰 없음은 렌더링 시점에 이미 알 수 있는 값이라 이펙트를 거칠 필요가
- * 없다 — 이펙트 본문에서 동기적으로 setState하면 react-hooks/set-state-in-effect가
- * 잡아내는 불필요한 연쇄 렌더가 생긴다. */
-function initialState(token: string | null): State {
-  if (token === null || token === "") {
-    return {
-      kind: "failed",
-      copy: {
-        title: "링크가 올바르지 않습니다",
-        hint: "메일의 링크를 그대로 열어 주세요. 주소가 잘렸을 수 있습니다.",
-      },
-    };
-  }
-  return { kind: "checking" };
+/* 주소에 토큰이 아예 없을 때. describeError 가 만드는 것과 같은 모양이라
+ * 실패 화면을 하나로 유지한다.
+ *
+ * 토큰이 프래그먼트로 옮겨간 뒤에도 이 문구가 맞다 — 오히려 더 맞다.
+ * 토큰이 사라지는 실제 경로가 "주소가 잘렸다"이기 때문이다: 사용자가
+ * 주소의 앞부분만 복사했거나, 메일 게이트웨이가 링크를 재작성하면서
+ * `#...` 를 떨어뜨렸거나. 원인만 말하고 끝내지 않는다는 카피 규칙은 아래
+ * ResendOrSignIn 이 채운다. */
+const MISSING_TOKEN: ErrorCopy = {
+  title: "링크가 올바르지 않습니다",
+  hint: "메일의 링크를 그대로 열어 주세요. 주소가 잘렸을 수 있습니다.",
+};
+
+/* 프래그먼트는 서버에 존재하지 않는다 — 브라우저가 `#` 뒤를 보내지 않는
+ * 것이 이 형식을 고른 이유 그 자체다(app/services/verification.py 의
+ * build_link). 그래서 토큰은 하이드레이션이 끝난 뒤에야 읽힌다.
+ *
+ * 그 "렌더 중에는 모르고 마운트 뒤에 안다"를 useEffect + setState 로 쓰면
+ * 두 가지가 걸린다: react-hooks/set-state-in-effect 가 잡는 불필요한 연쇄
+ * 렌더(이전 구현의 주석이 지적하던 바로 그것)와, 첫 렌더와 하이드레이션이
+ * 어긋나는 문제다. useSyncExternalStore 는 둘 다 없다 — 하이드레이션에는
+ * getServerSnapshot(=undefined, "아직 모른다")을 쓰고 그 직후 한 번
+ * getSnapshot 으로 넘어간다. 토큰 없음 판정을 마운트 이후로 미루면서도
+ * setState 는 한 번도 하지 않는다. */
+function subscribeToAddress(onChange: () => void): () => void {
+  window.addEventListener("hashchange", onChange);
+  return () => window.removeEventListener("hashchange", onChange);
+}
+
+function tokenInAddress(): string | null {
+  return readVerifyToken(window.location);
+}
+
+function noTokenYet(): undefined {
+  return undefined;
+}
+
+function useVerifyToken(): VerifyToken {
+  return useSyncExternalStore<VerifyToken>(
+    subscribeToAddress,
+    tokenInAddress,
+    noTokenYet,
+  );
+}
+
+function Checking() {
+  return <p className={styles.subtitle}>확인하고 있습니다…</p>;
+}
+
+function Failed({ copy }: { copy: ErrorCopy }) {
+  return (
+    <div className={styles.heading}>
+      <h1>{copy.title}</h1>
+      {/* VerifyBanner.tsx와 같은 이유의 role="status" — 실패 사유가 첫
+       * 렌더가 아니라 그 뒤에 나타나는 비동기 갱신이라, 이 표시가 없으면
+       * 스크린 리더 사용자는 "확인하고 있습니다…"에서 뭐가 바뀌었는지 알
+       * 길이 없다. 토큰 없음까지 마운트 이후 판정으로 바뀐 지금은 이 화면의
+       * 모든 경로가 그렇다. */}
+      <p className={styles.subtitle} role="status">
+        {copy.hint}
+      </p>
+      <ResendOrSignIn />
+    </div>
+  );
 }
 
 function VerifyInner() {
-  const token = useSearchParams().get("token");
+  const token = useVerifyToken();
   const { refresh } = useSession();
-  const [state, setState] = useState<State>(() => initialState(token));
+  const [state, setState] = useState<State>({ kind: "checking" });
   /* React 18의 개발용 이중 실행에서 토큰을 두 번 쓰면, 두 번째가
    * "이미 인증됨"으로 실패해 성공 화면이 실패 화면으로 뒤집힌다. */
   const started = useRef(false);
 
+  /* 레거시 `?token=` 으로 들어왔다면 주소를 프래그먼트 형태로 바꿔 히스토리와
+   * 주소창에서 토큰을 걷어낸다. 서버에는 이미 갔으니 그쪽은 되돌릴 수 없지만,
+   * 브라우저에 영구히 남는 것과 사용자가 주소창을 그대로 복사해 붙여넣는
+   * 것은 여기서 끝난다. 지우지 않고 옮기는 이유는 scrubQueryToken 참고. */
   useEffect(() => {
-    if (started.current || token === null || token === "") return;
+    const scrubbed = scrubQueryToken(window.location.href);
+    if (scrubbed !== null) window.history.replaceState(null, "", scrubbed);
+  }, []);
+
+  useEffect(() => {
+    if (started.current || typeof token !== "string") return;
     started.current = true;
 
     auth
@@ -57,9 +121,13 @@ function VerifyInner() {
       });
   }, [token, refresh]);
 
-  if (state.kind === "checking") {
-    return <p className={styles.subtitle}>확인하고 있습니다…</p>;
-  }
+  /* 주소를 아직 못 읽은 동안은 중립 화면을 그린다. 여기서 MISSING_TOKEN 을
+   * 그리면 정상 링크에서도 "링크가 올바르지 않습니다"가 한 프레임 번쩍인다. */
+  const address = tokenState(token);
+  if (address === "unknown") return <Checking />;
+  if (address === "missing") return <Failed copy={MISSING_TOKEN} />;
+
+  if (state.kind === "checking") return <Checking />;
 
   if (state.kind === "done") {
     return (
@@ -78,18 +146,7 @@ function VerifyInner() {
     );
   }
 
-  return (
-    <div className={styles.heading}>
-      <h1>{state.copy.title}</h1>
-      {/* VerifyBanner.tsx와 같은 이유의 role="status" — 실패 사유가 이펙트
-       * 완료 후에 나타나는 비동기 갱신이라, 이 표시가 없으면 스크린 리더
-       * 사용자는 "확인하고 있습니다…"에서 뭐가 바뀌었는지 알 길이 없다. */}
-      <p className={styles.subtitle} role="status">
-        {state.copy.hint}
-      </p>
-      <ResendOrSignIn />
-    </div>
-  );
+  return <Failed copy={state.copy} />;
 }
 
 /** 재발송은 세션이 있어야 한다. 없으면 로그인부터 안내한다. */
@@ -162,13 +219,14 @@ function ResendOrSignIn() {
 }
 
 export default function VerifyPage() {
-  /* useSearchParams 는 Suspense 경계를 요구한다. */
+  /* Suspense 경계가 없다. 있던 이유는 useSearchParams 가 그걸 요구해서였는데,
+   * 토큰이 프래그먼트로 옮겨가면서 이 페이지는 쿼리스트링을 읽지 않는다 —
+   * 주소는 useSyncExternalStore 로 클라이언트에서만 읽고, 그건 서스펜드하지
+   * 않는다. */
   return (
     <main className={styles.screen}>
       <div className={styles.card}>
-        <Suspense fallback={<p className={styles.subtitle}>확인하고 있습니다…</p>}>
-          <VerifyInner />
-        </Suspense>
+        <VerifyInner />
       </div>
     </main>
   );
