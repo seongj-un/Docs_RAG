@@ -23,6 +23,7 @@ from app.services.generate import Answer
 from app.services.ratelimit import query_limiter
 from app.services.retrieve import HybridResult, RetrievedChunk
 from app.services.tracing import (
+    SOURCE_QUERY,
     STAGE_DENSE,
     STAGE_RERANK,
     STAGE_RRF,
@@ -243,7 +244,7 @@ def test_trace_recording_failure_does_not_raise():
     async def scenario():
         async with SessionLocal() as session:
             # user_id violates the FK -> the insert fails inside record()
-            draft = TraceDraft(user_id=uuid.uuid4(), question="q")
+            draft = TraceDraft(user_id=uuid.uuid4(), question="q", source=SOURCE_QUERY)
             return await tracing.record(session, draft, Stopwatch())
 
     assert run_async(scenario) is None  # swallowed, not raised
@@ -323,3 +324,198 @@ def test_trace_survives_deletion_of_its_document(monkeypatch):
     assert delete_status == 204
     assert after_count == 1, "the trace must outlive the document it referenced"
     assert recorded_doc == doc_id  # id retained even though the row is gone
+
+
+# --- traces.source: 어느 소비자가 남긴 행인가 (마이그레이션 0011) ----------
+
+
+def test_each_consumer_records_its_own_source(monkeypatch):
+    """두 HTTP 소비자가 서로 다른 source 를 남긴다.
+
+    MCP 소비자(``mcp_search``)는 tests/test_mcp_server.py 가 같은 방식으로
+    단언한다 — 거기에 MCP 하네스가 있다.
+
+    이 컬럼이 생기기 전 MCP 트레이스를 고르는 방법은 ``llm_model IS NULL``
+    이라는 **파생 표식**이었다. 우연히 맞는 조건이라 생성 없는 네 번째
+    소비자가 생기면 조용히 거짓이 됐을 것이다. 여기서 검사하는 것은 그
+    우연이 아니라 선언이다: 두 경로 모두 생성을 거쳐 ``llm_model`` 이
+    채워지는데도 서로 구별된다는 것이 요점이고, 그래서 아래에서 두 행의
+    ``llm_model`` 이 **둘 다 NULL 이 아님**을 함께 확인한다.
+    """
+    from app.services import llm
+    from app.services import pipeline as pl
+
+    candidates = [_chunk("근거")]
+    _stub_pipeline(monkeypatch, candidates, ranked=[(0, 9.0)])
+
+    async def fake_stream(system_prompt, user_prompt, *, model=None):
+        yield "대화 답변 [p.3]."
+        yield llm.Generation(text="대화 답변 [p.3].", tokens_in=11, tokens_out=7)
+
+    monkeypatch.setattr(llm, "generate_stream", fake_stream)
+    monkeypatch.setattr(pl.settings, "rerank_min_score", 0.0)
+    # 스텁 임베딩이 질문과 무관하게 같은 벡터를 돌려주므로, 켜 두면 두 번째
+    # 턴이 첫 번째 턴의 답을 시맨틱 캐시에서 그대로 받아 생성을 건너뛴다 —
+    # 그러면 이 테스트가 보려던 "둘 다 생성을 거쳤다"가 성립하지 않는다.
+    monkeypatch.setattr(pl.settings, "semantic_cache_enabled", False)
+
+    async def scenario():
+        email = f"source-{uuid.uuid4().hex[:8]}@example.com"
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            await client.post(
+                "/auth/signup", json={"email": email, "password": "password123"}
+            )
+            one_shot = await client.post("/query", json={"question": "단발 질문"})
+            conv_id = (await client.post("/conversations", json={})).json()["id"]
+            streamed = await client.post(
+                f"/conversations/{conv_id}/query", json={"question": "대화 질문"}
+            )
+
+        async with SessionLocal() as session:
+            user = await auth.get_user_by_email(session, email)
+            rows = (
+                await session.execute(
+                    select(Trace).where(Trace.user_id == user.id)
+                )
+            ).scalars().all()
+            snapshot = {r.question: (r.source, r.llm_model) for r in rows}
+
+        await _drop_user(email)
+        return one_shot.status_code, streamed.status_code, snapshot
+
+    one_shot, streamed, snapshot = run_async(scenario)
+    assert one_shot == 200
+    assert streamed == 200
+
+    assert snapshot["단발 질문"][0] == tracing.SOURCE_QUERY
+    assert snapshot["대화 질문"][0] == tracing.SOURCE_CONVERSATION
+
+    # 두 행 다 생성을 거쳤다 — 즉 예전의 파생 표식으로는 서로 구별되지
+    # 않았을 행들이다. source 만이 이 둘을 가른다.
+    assert snapshot["단발 질문"][1] is not None
+    assert snapshot["대화 질문"][1] is not None
+
+
+def test_unknown_source_is_refused_before_anything_runs():
+    """오타가 조용히 새 소스를 만들지 못하게 하는 앱 쪽 잠금.
+
+    스키마의 CHECK 제약이 DB 쪽 잠금이고(마이그레이션 0011), 이쪽은 그보다
+    먼저 터져서 **트레이스가 조용히 사라지는 것**까지 막는다 — tracing.record
+    는 자기 예외를 삼키므로, CHECK 에만 기대면 잘못된 source 는 예외가 아니라
+    "기록되지 않은 질의"로 나타난다.
+    """
+    from app.services import pipeline as pl
+
+    user = User(id=uuid.uuid4(), email="u@example.com", password_hash="x")
+    with pytest.raises(ValueError, match="unknown trace source"):
+        pl.QueryRunner(
+            None, user, "질문", document_id=None, hybrid=False, source="mcp_serach"
+        )
+
+    # 세 소비자의 값은 서로 다르고 전부 허용 목록에 있다. 목록과 스키마의
+    # CHECK 가 어긋나면 런타임에 트레이스가 사라지므로 값 자체를 못박는다.
+    assert len({
+        tracing.SOURCE_QUERY,
+        tracing.SOURCE_CONVERSATION,
+        tracing.SOURCE_MCP_SEARCH,
+    }) == 3
+    assert tracing.TRACE_SOURCES >= {
+        tracing.SOURCE_QUERY,
+        tracing.SOURCE_CONVERSATION,
+        tracing.SOURCE_MCP_SEARCH,
+        tracing.SOURCE_LEGACY,
+    }
+
+
+def test_schema_check_constraint_matches_the_python_source_list():
+    """스키마의 CHECK 목록과 TRACE_SOURCES 가 어긋나지 않는지.
+
+    둘이 갈라지면 증상이 고약하다. 파이썬에만 있는 값은 INSERT 가 거절되는데
+    tracing.record 가 예외를 삼키므로 "그 소비자의 질의만 트레이스에 안
+    남는다"로 나타나고, 스키마에만 있는 값은 아무도 쓰지 않는 죽은 값으로
+    남는다. W6 가 값을 더할 때 마이그레이션을 빠뜨리면 여기서 걸린다.
+    """
+
+    async def scenario():
+        async with SessionLocal() as session:
+            return (
+                await session.execute(
+                    text(
+                        "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                        "WHERE conname = 'traces_source_check'"
+                    )
+                )
+            ).scalar_one_or_none()
+
+    definition = run_async(scenario)
+    assert definition is not None, "0011 의 CHECK 제약이 없다 — 마이그레이션 미적용?"
+
+    for source in tracing.TRACE_SOURCES:
+        assert f"'{source}'" in definition, f"{source} 가 스키마 CHECK 에 없다"
+
+    # 반대 방향: 스키마에만 있는 값이 없어야 한다. 제약 정의에서 따옴표 친
+    # 리터럴을 전부 뽑아 비교한다.
+    import re
+
+    in_schema = set(re.findall(r"'([a-z_]+)'", definition))
+    assert in_schema == set(tracing.TRACE_SOURCES)
+
+
+def test_cache_hit_keeps_its_source_though_it_records_no_model(monkeypatch):
+    """캐시 히트는 llm_model 을 남기지 않는다 — 그래도 source 는 정확하다.
+
+    이 테스트는 마이그레이션 0011 이 **왜** 필요했는지를 고정한다. W2 는 MCP
+    트레이스를 ``llm_model IS NULL`` 로 골랐고, 근거는 "생성 경로는 항상
+    llm_model 을 채운다"였다. 그 근거가 틀렸다: 시맨틱 캐시에 맞은 요청은
+    ``finalize`` 가 아니라 ``record_cache_hit`` 으로 끝나고, 그쪽은
+    llm_model 을 채우지 않는다. 즉 파생 표식은 **평범한 /query 캐시 히트를
+    MCP 호출로 집계**하고 있었다 — W4 의 L3 호출 수가 조용히 부풀 자리였다.
+
+    source 는 그런 사정과 무관하다. 누가 불렀는지는 무엇을 했는지와 다른
+    질문이고, 그래서 다른 컬럼이다.
+    """
+    from app.services import pipeline as pl
+
+    candidates = [_chunk("근거")]
+    _stub_pipeline(monkeypatch, candidates, ranked=[(0, 9.0)])
+    monkeypatch.setattr(pl.settings, "rerank_min_score", 0.0)
+    # 스텁 임베딩이 질문과 무관하게 같은 벡터라, 두 번째 질문이 첫 번째의
+    # 답에 그대로 맞는다 — 캐시 히트를 만들기 위해 켜 둔 채로 둔다.
+    monkeypatch.setattr(pl.settings, "semantic_cache_enabled", True)
+
+    async def scenario():
+        email = f"cachesrc-{uuid.uuid4().hex[:8]}@example.com"
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            await client.post(
+                "/auth/signup", json={"email": email, "password": "password123"}
+            )
+            await client.post("/query", json={"question": "첫 질문"})
+            await client.post("/query", json={"question": "둘째 질문"})
+
+        async with SessionLocal() as session:
+            user = await auth.get_user_by_email(session, email)
+            rows = (
+                await session.execute(
+                    select(Trace)
+                    .where(Trace.user_id == user.id)
+                    .order_by(Trace.created_at)
+                )
+            ).scalars().all()
+            snapshot = [(r.cached, r.source, r.llm_model) for r in rows]
+
+        await _drop_user(email)
+        return snapshot
+
+    snapshot = run_async(scenario)
+    assert len(snapshot) == 2
+
+    cached_rows = [row for row in snapshot if row[0]]
+    assert cached_rows, "캐시 히트가 나지 않았다 — 이 테스트의 전제가 깨졌다"
+
+    for cached, source, llm_model in cached_rows:
+        # 예전의 파생 표식이 이 행을 MCP 로 오인했을 자리.
+        assert llm_model is None
+        # 선언된 표식은 흔들리지 않는다.
+        assert source == tracing.SOURCE_QUERY

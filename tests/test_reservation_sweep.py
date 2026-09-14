@@ -18,6 +18,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.db import SessionLocal, engine
 from app.services import auth, usage
+from app.services.tracing import SOURCE_QUERY
 
 
 def run_async(coro_fn):
@@ -122,7 +123,12 @@ def test_orphaned_reservation_past_the_ttl_does_not_lock_the_account_forever(
         )
         async with SessionLocal() as session:
             runner = QueryRunner(
-                session, stand_in, "안녕하세요", document_id=None, hybrid=False
+                session,
+                stand_in,
+                "안녕하세요",
+                document_id=None,
+                hybrid=False,
+                source=SOURCE_QUERY,
             )
             raised = None
             try:
@@ -191,7 +197,8 @@ def test_a_fresh_reservation_still_blocks_the_next_request(monkeypatch):
         )
         async with SessionLocal() as session:
             runner = QueryRunner(
-                session, stand_in, "q", document_id=None, hybrid=False
+                session, stand_in, "q", document_id=None, hybrid=False,
+                source=SOURCE_QUERY,
             )
             raised = None
             try:

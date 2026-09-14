@@ -164,6 +164,10 @@ class TraceSummary(BaseModel):
 
     id: uuid.UUID
     question: str
+    # 어느 소비자가 남긴 트레이스인가 (query · conversation · mcp_search ·
+    # legacy). W4 가 L3 지표를 뽑을 때 이걸로 에이전트 트래픽만 고른다 —
+    # 노출하지 않으면 psql 없이는 못 쓴다. 값의 뜻은 services/tracing.py.
+    source: str
     document_id: uuid.UUID | None = None
     hybrid: bool
     cached: bool
@@ -228,6 +232,12 @@ class FailureReason(BaseModel):
 class AdminStats(BaseModel):
     window_hours: int
     queries: QueryStats
+    # 소비자별 호출 수. W4 의 L3 지표 중 "호출 수"가 정확히 이 숫자이고,
+    # 에이전트가 사람보다 훨씬 자주 부르기 때문에 합계만 보면 두 트래픽이
+    # 섞여 어느 쪽이 늘었는지 알 수 없다. 창 안에 없던 소스는 키 자체가
+    # 없다 — 0 을 채워 넣으면 "0회 불렸다"와 "그 소스가 존재하지 않는다"가
+    # 구별되지 않는다.
+    by_source: dict[str, int]
     # Latency of what users actually waited for, cache hits included.
     total_ms: Percentiles
     # Where the time went, cache hits excluded — a hit skips embed/rerank and

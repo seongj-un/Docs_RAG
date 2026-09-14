@@ -13,3 +13,7 @@ google-genai>=0.3
 pydantic>=2.7
 pydantic-settings>=2.3
 python-multipart>=0.0.9
+# Pinned exactly, unlike everything above. The MCP SDK is pre-1.0 in spirit:
+# 2.2.0 removed mcp.server.fastmcp outright (FastMCP -> MCPServer), so a
+# floating minor here is a build that stops importing. Bump deliberately.
+mcp==2.2.0

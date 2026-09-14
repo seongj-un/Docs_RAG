@@ -15,6 +15,7 @@ from app.models import User
 from app.services import pipeline
 from app.services.retrieve import HybridResult, RetrievedChunk
 from app.services.tracing import (
+    SOURCE_QUERY,
     STAGE_DENSE,
     STAGE_RERANK,
     STAGE_RRF,
@@ -40,7 +41,7 @@ def _chunk(text: str, score: float = 0.0) -> RetrievedChunk:
 
 def _runner(hybrid: bool, sparse=SPARSE) -> pipeline.QueryRunner:
     runner = pipeline.QueryRunner(
-        None, USER, "질문", document_id=None, hybrid=hybrid
+        None, USER, "질문", document_id=None, hybrid=hybrid, source=SOURCE_QUERY
     )
     runner.dense = DENSE
     runner.sparse = sparse

@@ -150,8 +150,96 @@ tests/                # pytest (Postgres 없으면 통합 테스트는 스킵)
 | `GET /traces` · `GET /traces/{id}` | 질의 진단 기록 |
 | `GET /admin/stats` | 운영 통계 (헤더 `X-Admin-Token`) |
 | `GET /health` | 공개 |
+| `POST /mcp` | MCP 서버 (Streamable HTTP). 아래 참조 |
 
 컨테이너 스택에서는 전부 `/api` 아래에 붙는다 — `/api/health`, `/api/query` …
+
+## MCP 서버 — 에이전트로 붙이기 (M7 W2)
+
+Claude·Cursor 같은 에이전트가 **우리 검색을 직접 쓰게** 하는 엔드포인트다.
+별도 프로세스가 아니라 같은 FastAPI 앱에 마운트돼 있으므로, 앱이 떠 있으면
+이미 떠 있다.
+
+노출하는 툴은 `search_documents` **하나뿐이다.** 이 툴은 **검색까지만** 한다 —
+청크를 돌려주고, 답을 쓰는 것은 붙인 에이전트다. 생성까지 MCP 로 내보낼지는
+W6 에서 정한다.
+
+### 1. 세션 토큰 얻기
+
+새 토큰 체계는 없다. **웹에서 쓰는 그 세션**을 그대로 쓰고, 운반 수단만
+쿠키에서 `Authorization: Bearer` 로 바뀐다. 즉 로그아웃하면 에이전트의 접근도
+같은 순간에 끊기고, 만료도 웹과 같다(`SESSION_TTL_DAYS`, 기본 14일).
+
+로그인 응답의 `Set-Cookie` 에 들어 있는 값이 그대로 토큰이다:
+
+```bash
+curl -sS -D - -o /dev/null -X POST http://localhost:8000/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"me@example.com","password":"비밀번호"}' \
+  | sed -n 's/^[Ss]et-[Cc]ookie: session_id=\([^;]*\).*/\1/p'
+```
+
+출력되는 UUID 하나가 토큰이다. 컨테이너 스택이라면 주소는
+`https://<도메인>/api/auth/login`.
+
+### 2. 클라이언트에 등록
+
+전송 방식은 **Streamable HTTP**(stateless)다. 핸드셰이크도 세션도 없다.
+
+| | 값 |
+| --- | --- |
+| URL (로컬) | `http://localhost:8000/mcp` |
+| URL (컨테이너·배포) | `https://<도메인>/api/mcp` |
+| 헤더 | `Authorization: Bearer <세션 UUID>` |
+
+Claude Code:
+
+```bash
+claude mcp add --transport http docs-rag http://localhost:8000/mcp \
+  --header "Authorization: Bearer <세션 UUID>"
+```
+
+Cursor (`~/.cursor/mcp.json`) 및 `.mcp.json` 형식의 클라이언트 일반:
+
+```json
+{
+  "mcpServers": {
+    "docs-rag": {
+      "url": "http://localhost:8000/mcp",
+      "headers": { "Authorization": "Bearer <세션 UUID>" }
+    }
+  }
+}
+```
+
+붙었는지 확인하는 가장 짧은 방법은 에이전트에게 "내 문서에서 …를 찾아줘"라고
+시키고 `GET /traces` 에 행이 남는지 보는 것이다 — MCP 호출은 `source` 가
+`mcp_search` 인 트레이스로 남는다. `GET /admin/stats` 의 `by_source` 는 같은
+것을 소비자별 호출 수로 보여준다(`query` · `conversation` · `mcp_search`).
+
+### 3. 배포에서 한 번은 막히는 것
+
+- **421 Invalid Host header.** DNS 리바인딩 보호가 기본으로 켜져 있고, 설정을
+  비워 두면 로컬호스트만 허용한다. 공개 도메인으로 붙이려면
+  `MCP_ALLOWED_HOSTS=["docs.example.com"]` 을 넣어야 한다. 기본값을 "전부
+  허용"이 아니라 이쪽으로 둔 것은 의도다 — 잊었을 때 조용히 열린 채로 도는
+  대신 시끄럽게 실패한다.
+- **경로에 `/api` 가 붙는다.** Caddy 가 `handle_path /api/*` 로 접두사를
+  떼므로 공개 URL 은 `/api/mcp` 다. 앱 자체는 `/mcp` 로 듣는다.
+- **401 이 계속 난다면** 토큰이 UUID 인지, 그리고 그 세션이 아직 살아 있는지
+  (로그아웃하지 않았는지) 본다. 만료·폐기·오타는 전부 같은 401 이다 — 어느
+  쪽인지 알려주지 않는 것이 의도다.
+
+### 4. 알아둘 비용
+
+`search_documents` 한 번은 **사용자의 하루 질의 쿼터(`QUOTA_QUERIES_PER_DAY`,
+기본 200)를 1 깎는다.** LLM 을 부르지 않는데도 그렇게 한 이유는, 이 툴이 하는
+일이 질의 비용의 비싼 절반이기 때문이다 — 실측으로 리랭킹만 8.8초다
+(`CAND_K` 절 참조). 근거 전문은 `app/mcp/tools.py` 의 쿼터 주석에 있다.
+
+에이전트는 사람보다 훨씬 자주 부른다. 한 질문이 검색 다섯 번이 되는 것이
+정상이므로, 하루 실사용에서 200이 모자라다고 느껴질 수 있다 — 그 관찰 자체가
+W2 의 완료 기준("불편한 지점 3개 이상 기록")에 해당한다.
 
 ## 알아둘 동작
 
@@ -240,6 +328,12 @@ per-IP rate limit이 `request.client.host`를 쓴다. 프록시를 붙이면 그
 | `UNVERIFIED_QUOTA_QUERIES` | 5 | 미인증 계정 질의 한도. **계정 수명 전체 누적** |
 | `UNVERIFIED_QUOTA_DOCUMENTS` | 1 | 미인증 계정 업로드 한도. 역시 수명 전체 누적 |
 | `RATE_LIMIT_VERIFY_RESEND_PER_MIN` | 1/분 | 인증 메일 재발송 제한 |
+| `MCP_ENABLED` | `true` | MCP 서버 마운트 여부. 끄면 경로가 404 |
+| `MCP_PATH` | `/mcp` | MCP 엔드포인트 경로 |
+| `MCP_ALLOWED_HOSTS` | 비움 = 로컬호스트만 | 허용 Host. **공개 배포에서는 도메인을 넣어야 한다** (아니면 421) |
+| `MCP_ALLOWED_ORIGINS` | 비움 = 로컬호스트만 | 허용 Origin. Claude·Cursor 는 Origin 을 안 보내므로 보통 비워 둔다 |
+| `MCP_TOOLS_CACHE_TTL_MS` | 60000 | `tools/list` 응답의 `ttlMs`. `cacheScope` 는 `private` 고정 |
+| `MCP_RESOURCE_SERVER_URL` | 비움 = 끔 | RFC 9728 메타데이터 라우트. W7 에서 켠다 |
 
 > `MIN_SCORE`(코사인)를 리랭커 시그모이드에 재사용했다가 답변 가능한 질문의
 > 21%를 LLM 호출도 없이 거부한 적이 있다. 두 점수는 같은 양이 아니다.
@@ -351,6 +445,41 @@ python -m eval.sparse_channels   # lexical 채널 비교 (fts / trgm / bge)
 python -m eval.golden_run        # 골든셋 3문서·36문항 → 기록 덤프
 python -m eval.judge_run         # 위 기록으로 4개 품질 지표 산출
 ```
+
+## L1 평가 하네스 (M7 W3)
+
+위의 러너들이 실험용 일회성이라면, 이쪽은 **회귀를 자동으로 잡는 것**이
+목적이다. 데이터셋은 jsonl, 지표는 청크 단위 L1(recall@k · MRR · nDCG@10),
+결과는 Postgres에 버전별로 쌓이고, 두 실행을 diff하면 회귀 시 non-zero로
+끝난다. LLM은 한 번도 부르지 않는다 — 결정론적이고 빨라서 매 커밋 돌 수 있다.
+
+```bash
+python -m eval.harness validate --dataset eval/datasets/synthetic_golden.jsonl
+python -m eval.harness --dataset eval/datasets/synthetic_golden.jsonl
+python -m eval.harness run --dataset <path> --config dense --config hybrid+rerank
+python -m eval.harness diff --base latest~1 --head latest --dataset <path>
+python -m eval.harness list --dataset <path>
+```
+
+`validate`는 DB도 모델 서버도 필요 없다. `run`은 둘 다 필요하고, `--no-store`
+로 저장을 끌 수 있다. `diff`는 `--base-json`/`--head-json`으로 파일만 놓고도
+돈다.
+
+**정답은 청크 ID가 아니라 원문 스니펫으로 저장한다.** 청크 UUID로 고정하면
+인덱싱할 때마다 참조가 죽고, 무엇보다 청킹 전략을 바꾸는 순간(W5의 주요 실험
+대상) 골든셋 전체가 무효가 된다. 러너가 실행 시점에 스니펫을 지금 인덱스의
+청크로 역매칭하므로 그 종속성이 생기지 않는다. 스니펫이 문서에서 사라지면
+0점이 아니라 **예외로 죽는다** — 라벨이 문서를 못 따라갔다는 신호다. 포맷과
+규칙은 [`eval/datasets/FORMAT.md`](eval/datasets/FORMAT.md).
+
+이 저장소에 든 데이터셋(`synthetic_golden`, `synthetic_hard`)은 기존 합성
+코퍼스를 변환한 **하네스 검증용 픽스처**다. M7의 실제 측정 대상인 업무 문서
+골든셋은 private repo에 있고, `--provider` 로 갈아끼운다.
+
+CI에서는 backend 잡이 데이터셋 검증과 하네스 전체(포맷·스니펫 고유성·지표·회귀
+판정·Postgres 저장)를 매 커밋 돌리고, 실제 수치와 diff는 모델 서버가 붙은
+러너에서만 도는 `eval` 잡이 맡는다(저장소 변수 `EVAL_ENABLED=true`).
+이유는 `.github/workflows/ci.yml` 주석 참조.
 
 ## 운영
 
