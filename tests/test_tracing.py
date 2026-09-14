@@ -254,6 +254,12 @@ def test_unknown_or_foreign_document_scope_is_404(monkeypatch):
 
     Regression guard: the semantic cache has an FK on document_id, so an
     unvalidated scope used to surface as a 500 from a foreign-key violation.
+
+    This used to assert that **no** trace was written, as proof that nothing
+    ran. That proof has moved: failed queries are recorded now, so the claim
+    is made by the shape of the row instead — a 404 with no answer, no tokens
+    and no retrieval stages is a request that was rejected before it did any
+    work, and it is still distinguishable from the 500 this guards against.
     """
     candidates = [_chunk("c0")]
     _stub_pipeline(monkeypatch, candidates, ranked=[(0, 1.0)])
@@ -268,14 +274,20 @@ def test_unknown_or_foreign_document_scope_is_404(monkeypatch):
             resp = await client.post(
                 "/query", json={"question": "q", "document_id": str(uuid.uuid4())}
             )
-            traces = await client.get("/traces")
-            out = (resp.status_code, len(traces.json()))
+            traces = (await client.get("/traces")).json()
+            out = (resp.status_code, traces)
         await _drop_user(email)
         return out
 
-    status, trace_count = run_async(scenario)
+    status, traces = run_async(scenario)
     assert status == 404
-    assert trace_count == 0  # rejected before any work was done
+    assert len(traces) == 1
+    recorded = traces[0]
+    assert recorded["status_code"] == 404
+    assert recorded["error"] == "not found"
+    # Nothing ran: no answer, no spend, and no retrieval stage reached.
+    assert recorded["tokens_in"] == 0 and recorded["tokens_out"] == 0
+    assert recorded["embed_ms"] is None
 
 
 def test_trace_survives_deletion_of_its_document(monkeypatch):

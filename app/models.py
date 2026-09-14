@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    column,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, UUID
@@ -231,10 +232,31 @@ class Trace(Base):
     at: ``document_id`` and ``TraceChunk.chunk_id`` carry no foreign key, and a
     deleted document leaves its history intact. They do cascade from the user,
     since a deleted account should take its query history with it.
+
+    A row exists for **every admitted request**, not only the ones that
+    answered. Until 0010 only successes and cache hits were written, so the
+    table quietly under-counted exactly when it mattered: with the embedding
+    server down, ``/admin/stats`` reported *fewer* queries than a healthy hour
+    and the outage read as a quiet afternoon.
     """
 
     __tablename__ = "traces"
-    __table_args__ = (Index("traces_user_created_idx", "user_id", "created_at"),)
+    __table_args__ = (
+        Index("traces_user_created_idx", "user_id", "created_at"),
+        # The column exists to be looked up by an exact id copied out of a log
+        # line, so it gets the index that makes that a lookup instead of a
+        # scan. Partial because every pre-0010 row is NULL and no lookup can
+        # ever want them — and NULL is also what a trace written outside a
+        # request context stores. Not unique: an inbound ``X-Request-Id`` is
+        # accepted from a proxy (app/logging.py), so a client can repeat one,
+        # and a unique index would turn that into a failed insert — tracing
+        # breaking the request it was only supposed to describe.
+        Index(
+            "traces_request_id_idx",
+            "request_id",
+            postgresql_where=column("request_id").isnot(None),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -259,6 +281,26 @@ class Trace(Base):
     rerank_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     generate_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The HTTP status the request ended with, but **only when it failed**.
+    # NULL is the answer to "did this query fail?" for every row that
+    # succeeded and for every row written before 0010 — which is honest,
+    # because back then nothing else was ever recorded. Storing a constant
+    # 200 on the success path was rejected: it adds no information and costs
+    # the one thing this shape gives us, an unambiguous NULL.
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Why it failed, in a form that groups. For an ``HTTPException`` this is
+    # the detail the caller already received ("search unavailable"); for an
+    # unexpected exception it is the **class name only**. The message is
+    # deliberately dropped: it carries the question, file names, provider
+    # response bodies — and the full traceback is already in the app log,
+    # which ``request_id`` now joins this row to.
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The id stamped on every log line of this request (app/logging.py), so
+    # Caddy, uvicorn, the app log and this row are one thing. Text rather
+    # than a fixed width: ours is uuid4().hex, but an inbound proxy id is
+    # accepted up to 64 characters and a length cap would only be a way for
+    # some future proxy's format to fail an insert.
+    request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )

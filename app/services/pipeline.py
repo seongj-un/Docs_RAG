@@ -103,6 +103,13 @@ class QueryRunner:
         )
         self.dense: list[float] = []
         self.sparse: SparseVector | None = None
+        # "이 요청은 받아들여졌고, 아직 트레이스 행을 쓰지 않았다."
+        #
+        # 실패를 **어디까지** 기록할지에 대한 판단이 이 플래그 하나에 들어
+        # 있다. enforce_limits 가 통과한 뒤부터 record_cache_hit/finalize 가
+        # 행을 쓰기 전까지의 구간 — 즉 서버가 실제로 일을 시작한 질의만
+        # 기록한다. 자세한 근거는 record_failure 참조.
+        self._trace_pending = False
         # enforce_limits 가 예약에 성공하면 채워지고, record_cache_hit 나
         # finalize 가 그 예약을 진짜 기록으로 바꾸는 순간 다시 None 이 된다.
         # 요청이 둘 중 어느 쪽에도 이르지 못하고 끝나면 이 값이 곧
@@ -141,6 +148,11 @@ class QueryRunner:
         except BaseException:
             await self.session.rollback()
             raise
+
+        # 커밋이 끝난 **뒤에** 세운다. 위에서 튕겨나간 요청(레이트리밋·쿼터·
+        # 미인증)은 예약도 없고 트레이스도 없다 — 아래 record_failure 가
+        # 설명하는 그 판단이 여기서 한 줄로 강제된다.
+        self._trace_pending = True
 
     async def resolve_scope(self) -> None:
         """A scope the caller does not own is 404, same as the documents API.
@@ -184,7 +196,25 @@ class QueryRunner:
         self.draft.cached = True
         self.draft.refused = hit.refused
         self.draft.answer = hit.answer
+        # record 보다 먼저 내린다. record 는 실패해도 조용히 None 을
+        # 돌려주므로, 여기서 안 내리면 뒤이은 실패 처리가 같은 요청에
+        # 두 번째 행을 쓰려 든다.
+        self._trace_pending = False
         await tracing.record(self.session, self.draft, self.watch)
+
+    def _remember(self, found: Retrieval) -> Retrieval:
+        """검색 결과를 초안에 미리 새겨 둔다 — 뒤에서 실패할 때를 위해서다.
+
+        성공하면 finalize 가 같은 값을 다시 넣으므로 이 복사는 성공 경로에
+        아무 영향이 없다. 값이 필요한 쪽은 실패 경로다: 생성 단계에서
+        LLM 이 터졌을 때 "검색은 정답 청크를 찾아뒀는데 생성이 죽었다"와
+        "애초에 못 찾았다"는 완전히 다른 장애이고, 이 모듈이 단계를 쪼개
+        기록하는 이유가 바로 그 구분이다. 초안에 안 남기면 실패한 질의의
+        트레이스는 단계가 통째로 빈 채로 남아, 있으나 마나 해진다.
+        """
+        self.draft.stage_ids = found.stage_ids
+        self.draft.stage_chunks = found.stage_chunks
+        return found
 
     async def retrieve(self) -> Retrieval:
         if not self.use_hybrid or self.sparse is None:
@@ -195,7 +225,7 @@ class QueryRunner:
                     user_id=self.user.id,
                     document_id=self.document_id,
                 )
-            return Retrieval(hits, {}, {STAGE_DENSE: hits})
+            return self._remember(Retrieval(hits, {}, {STAGE_DENSE: hits}))
 
         async with self.watch.time("retrieve"):
             fused = await retrieve.hybrid_search(
@@ -208,7 +238,7 @@ class QueryRunner:
 
         stage_ids = {STAGE_DENSE: fused.dense_ids, STAGE_SPARSE: fused.sparse_ids}
         if not fused.candidates:
-            return Retrieval([], stage_ids, {})
+            return self._remember(Retrieval([], stage_ids, {}))
 
         async with self.watch.time("rerank"):
             with _reachable():
@@ -221,8 +251,8 @@ class QueryRunner:
             chunk.score = score  # replace RRF score with reranker relevance
             top.append(chunk)
 
-        return Retrieval(
-            top, stage_ids, {STAGE_RRF: fused.candidates, STAGE_RERANK: top}
+        return self._remember(
+            Retrieval(top, stage_ids, {STAGE_RRF: fused.candidates, STAGE_RERANK: top})
         )
 
     @property
@@ -269,6 +299,45 @@ class QueryRunner:
         self.draft.tokens_out = tokens_out
         self.draft.stage_ids = found.stage_ids
         self.draft.stage_chunks = found.stage_chunks
+        self._trace_pending = False  # record_cache_hit 와 같은 이유
+        await tracing.record(self.session, self.draft, self.watch)
+
+    async def record_failure(self, exc: BaseException) -> None:
+        """실패로 끝난 질의를 traces 에 남긴다.
+
+        **무엇을 남기고 무엇을 남기지 않는지가 이 함수의 판단이다.**
+
+        남긴다: enforce_limits 를 통과한 뒤에 깨진 것 전부 — 소유하지 않은
+        문서 범위(404), 임베딩/리랭크 서버 다운(503), 생성 중 예기치 못한
+        예외(500), 스트림 도중의 실패. 이들은 서버가 실제로 일을 시작한
+        요청이고, 장애 중에 운영자가 세고 싶은 것도 정확히 이것이다.
+        볼륨은 레이트리밋과 쿼터가 이미 위에서 막아준다.
+
+        남기지 않는다: enforce_limits 자신이 거절한 요청 — 분당 레이트리밋
+        429, 일일 쿼터 429, 미인증 403. 두 가지 이유다.
+        ① 이것들은 시스템의 고장이 아니라 입장 통제의 정상 동작이다.
+        ② 레이트리밋의 존재 이유가 "거절을 싸게 만드는 것"인데, 거절마다
+           행을 하나씩 insert 하면 재시도 루프에 빠진 클라이언트 하나가
+           무제한의 DB 쓰기로 번역된다 — 관측이 관측 대상을 무너뜨리는
+           바로 그 모양이다. 게다가 이미 세어지고 있다: 쿼터 거절은
+           usage_events 에, 셋 다 요청 id 가 찍힌 액세스 로그에 남는다.
+
+        한 요청에 두 행을 쓰지 않는다(``_trace_pending``). finalize 뒤에
+        터진 실패 — 예컨대 답변을 대화에 저장하다 깨진 경우 — 는 이미
+        자기 트레이스를 갖고 있고, 그 행을 실패로 덮어쓰면 실제로 있었던
+        답변과 토큰 소비가 지워진다.
+
+        호출자는 예약 정리(``release_reservation``) **뒤에** 부른다. 정리는
+        사용자의 쿼터가 걸린 정확성 문제고 이 기록은 최선 노력이라, 순서가
+        뒤바뀌면 기록이 정리를 밀어낼 수 있다.
+        """
+        if not self._trace_pending:
+            return
+        self._trace_pending = False
+
+        failure = tracing.describe_failure(exc)
+        self.draft.status_code = failure.status_code
+        self.draft.error = failure.reason
         await tracing.record(self.session, self.draft, self.watch)
 
     async def release_reservation(self) -> None:
