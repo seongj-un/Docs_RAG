@@ -16,6 +16,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ARG NEXT_PUBLIC_API_BASE=/api
 ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
+# public/ 은 지금 비어 있어 저장소에 없다. 아래 runner 의 COPY 는 없는 경로에서
+# 실패하므로(빌드가 여기서 통째로 깨진다) 빈 디렉터리를 만들어 둔다. 나중에
+# 정적 자산이 생기면 그대로 복사된다.
+RUN mkdir -p public
 # 타입 검사가 여기서 함께 돈다 — vitest 는 타입을 보지 않으므로,
 # 빌드가 타입 오류를 잡는 유일한 관문이다.
 RUN npm run build
